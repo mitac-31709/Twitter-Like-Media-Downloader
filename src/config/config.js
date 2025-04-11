@@ -48,7 +48,7 @@ const CONFIG = {
   PARSE_ERROR_LIST_PATH: path.join(dirs.logsDir, 'parse-error-ids.json'),
   
   // デバッグモード (詳細情報を表示) (デフォルト: false)
-  DEBUG: false,
+  DEBUG: true,
   
   // ファイルの読み込みエンコーディング (デフォルト: utf8)
   ENCODING: 'utf8'

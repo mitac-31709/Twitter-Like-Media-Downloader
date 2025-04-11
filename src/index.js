@@ -4,7 +4,7 @@ const { loadLikesData, getDownloadedIds } = require('./utils/file-utils');
 const { loadSkipLists, getListSizes, notFoundIds, sensitiveIds } = require('./utils/list-handlers');
 const { processTweetMedia } = require('./services/media-service');
 const { sleep, saveErrorLogs } = require('./utils/error-handlers');
-const { ProgressBar } = require('./utils/progress-bar');
+const { MultiProgressBar, createMultiBarLogger } = require('./utils/progress-bar');
 
 /**
  * 各いいねから画像をダウンロード
@@ -19,11 +19,31 @@ async function downloadAllImages() {
   
   console.log(`合計 ${likesData.length} 件のいいねを処理します...`);
   
-  const progressBar = new ProgressBar(likesData.length, { 
-    showElapsedTime: true,
-    complete: '■',
-    incomplete: '□'
-  }).start();
+  // マルチプログレスバーのインスタンス化（改善版）
+  const multiBar = new MultiProgressBar({
+    clearOnComplete: false,
+    hideCursor: true,
+    barLength: 40,
+    fps: 5, // 更新頻度を下げて負荷を抑える
+    synchronousUpdate: true // 同期更新で表示の競合を防止
+  });
+  
+  // 全体の進捗バーを作成
+  const totalBar = multiBar.createMainBar(likesData.length);
+  
+  // 現在処理中のファイル用バーを作成（表示幅を制限して重複表示を防止）
+  const fileBar = multiBar.addBar('current-file', 100, {
+    format: '{bar} {percentage}% | {filename} | {status}'
+  }, {
+    filename: '準備中...',
+    status: '待機中'
+  });
+  
+  // カスタムロガーを作成（バッファリングオプションを有効化）
+  const logger = createMultiBarLogger(multiBar, {
+    useBuffer: true, // ログをバッファリングして表示の競合を防止
+    debug: CONFIG.DEBUG
+  });
   
   // すでにダウンロード済みのツイートIDを取得（メディアとメタデータを別々に）
   const { mediaIds, metadataIds } = getDownloadedIds();
@@ -38,82 +58,164 @@ async function downloadAllImages() {
   console.log(`センシティブコンテンツリスト: ${listSizes.sensitiveIds}件`);
   console.log(`解析エラーリスト: ${listSizes.parseErrorIds}件`);
   
+  // プログレスバーを開始
+  totalBar.start(likesData.length, 0, { status: '処理を開始しています...' });
+  
   // エラーカウンター（連続APIエラーを検出するため）
   let consecutiveApiErrorCount = 0;
   
-  for (let i = 0; i < likesData.length; i++) {
-    const likeItem = likesData[i].like;
-    const tweetId = likeItem.tweetId;
-    const tweetUrl = likeItem.expandedUrl || `https://twitter.com/i/web/status/${tweetId}`;
-    
-    console.log(`[${i+1}/${likesData.length}] ツイート処理中: ${tweetId}`);
-    
-    // 存在しないツイートリストにあるツイートはスキップ
-    if (notFoundIds.has(tweetId)) {
-      console.log(`  ⏭️ このツイートは存在しないためスキップします。`);
-      continue;
-    }
-    
-    // センシティブコンテンツリストにあるツイートはスキップ
-    if (sensitiveIds.has(tweetId)) {
-      console.log(`  ⏭️ このツイートはセンシティブコンテンツを含むためスキップします。`);
-      continue;
-    }
-    
-    // メディアとメタデータの存在確認
-    const hasMedia = mediaIds.has(tweetId);
-    const hasMetadata = metadataIds.has(tweetId);
-    
-    // 両方ともダウンロード済みの場合はスキップ
-    if (hasMedia && hasMetadata) {
-      console.log(`  ⏭️ このツイートの画像とメタデータは両方既に保存済みです。スキップします。`);
-      continue;
-    }
-    
-    // ツイートメディアの処理
-    const processResult = await processTweetMedia(tweetId, tweetUrl, { hasMedia, hasMetadata });
-    
-    // メタデータからのダウンロードかAPIからのダウンロードかを判定
-    const usedAPI = processResult.usedAPI;
-    
-    if (usedAPI) {
-      // API呼び出しエラーの場合はカウンターを増加
-      if (processResult.errorType === 'api') {
-        consecutiveApiErrorCount++;
-      } else {
-        // エラーでなければカウンターをリセット
-        consecutiveApiErrorCount = 0;
+  // 定期的にプログレスバーを強制的に再描画するためのインターバル
+  const redrawInterval = setInterval(() => {
+    multiBar.redraw();
+  }, 1000); // 1秒ごとに再描画
+  
+  // プロセス終了時に確実にインターバルをクリア
+  process.on('SIGINT', () => {
+    clearInterval(redrawInterval);
+    multiBar.stop();
+    console.log('\n処理が中断されました。');
+    process.exit(0);
+  });
+  
+  try {
+    for (let i = 0; i < likesData.length; i++) {
+      const likeItem = likesData[i].like;
+      const tweetId = likeItem.tweetId;
+      const tweetUrl = likeItem.expandedUrl || `https://twitter.com/i/web/status/${tweetId}`;
+      
+      // ファイル名の表示を短くして重複表示を防止
+      const displayId = tweetId.length > 10 ? tweetId.substring(0, 10) + '...' : tweetId;
+      
+      // 全体の進捗状況を更新（パーセント表示を修正）
+      const percentage = Math.min(99, Math.round((i / likesData.length) * 100));
+      multiBar.update('main', i, { 
+        status: `処理中: ${displayId}`,
+        percentage: percentage
+      });
+      
+      // ファイル進捗バーを更新
+      multiBar.update('current-file', 0, {
+        filename: `ID: ${displayId}`,
+        status: '処理開始'
+      });
+      
+      // 存在しないツイートリストにあるツイートはスキップ
+      if (notFoundIds.has(tweetId)) {
+        multiBar.updateStatus('current-file', '存在しないツイート - スキップ');
+        await sleep(250); // UI表示のため少し待機
+        continue;
       }
       
-      // 連続APIエラーが3回以上発生した場合は長めに待機
-      if (consecutiveApiErrorCount >= 3) {
-        console.log(`⚠️ 連続して${consecutiveApiErrorCount}回のAPIエラーが発生しました。${CONFIG.ERROR_COOLDOWN / 1000}秒間待機します...`);
-        await sleep(CONFIG.ERROR_COOLDOWN);
-        // エラーカウンターをリセット
-        consecutiveApiErrorCount = 0;
-      } else {
-        // APIを使用した場合のみ待機（制限を避けるため）
-        console.log(`  ⏱️ APIの制限を避けるため ${CONFIG.API_CALL_DELAY / 1000}秒間待機します...`);
-        await sleep(CONFIG.API_CALL_DELAY);
+      // センシティブコンテンツリストにあるツイートはスキップ
+      if (sensitiveIds.has(tweetId)) {
+        multiBar.updateStatus('current-file', 'センシティブコンテンツ - スキップ');
+        await sleep(250); // UI表示のため少し待機
+        continue;
       }
-    } else {
-      // APIを使用しなかった場合は待機しない
-      console.log('  ✅ APIを使用しなかったため、待機せずに次の処理に進みます');
+      
+      // メディアとメタデータの存在確認
+      const hasMedia = mediaIds.has(tweetId);
+      const hasMetadata = metadataIds.has(tweetId);
+      
+      // 両方ともダウンロード済みの場合はスキップ
+      if (hasMedia && hasMetadata) {
+        multiBar.updateStatus('current-file', '既にダウンロード済み - スキップ');
+        await sleep(250); // UI表示のため少し待機
+        continue;
+      }
+      
+      // 処理状態の表示を更新
+      multiBar.updateStatus('current-file', hasMedia ? 'メタデータのみダウンロード中...' : 
+                                           hasMetadata ? '画像/動画のみダウンロード中...' : 
+                                           '画像/動画とメタデータをダウンロード中...');
+      
+      // ツイートメディアの処理
+      // 進捗状況更新用のコールバックを追加
+      const processResult = await processTweetMedia(tweetId, tweetUrl, { 
+        hasMedia, 
+        hasMetadata,
+        onProgress: (status, progress) => {
+          if (progress && typeof progress === 'number') {
+            multiBar.update('current-file', progress, { status });
+          } else {
+            multiBar.updateStatus('current-file', status);
+          }
+        },
+        // ロガー関数を渡してログをプログレスバー経由で表示
+        logger: (message) => {
+          logger.debug(message);
+        }
+      });
+      
+      // 処理結果に基づいてステータスを更新
+      if (processResult.error) {
+        multiBar.updateStatus('current-file', `エラー: ${processResult.errorType || '不明なエラー'}`);
+      } else {
+        multiBar.updateStatus('current-file', '完了');
+      }
+      
+      // メタデータからのダウンロードかAPIからのダウンロードかを判定
+      const usedAPI = processResult.usedAPI;
+      
+      if (usedAPI) {
+        // API呼び出しエラーの場合はカウンターを増加
+        if (processResult.errorType === 'api') {
+          consecutiveApiErrorCount++;
+          multiBar.updateStatus('main', `API エラー発生 (${consecutiveApiErrorCount}回連続)`);
+        } else {
+          // エラーでなければカウンターをリセット
+          consecutiveApiErrorCount = 0;
+        }
+        
+        // 連続APIエラーが3回以上発生した場合は長めに待機
+        if (consecutiveApiErrorCount >= 3) {
+          multiBar.updateStatus('current-file', `待機中... (${CONFIG.ERROR_COOLDOWN / 1000}秒)`);
+          await sleep(CONFIG.ERROR_COOLDOWN);
+          // エラーカウンターをリセット
+          consecutiveApiErrorCount = 0;
+        } else {
+          // APIを使用した場合のみ待機（制限を避けるため）
+          multiBar.updateStatus('current-file', `API制限待機中... (${CONFIG.API_CALL_DELAY / 1000}秒)`);
+          await sleep(CONFIG.API_CALL_DELAY);
+        }
+      } else {
+        // APIを使用しなかった場合は待機しない
+        await sleep(300); // UI表示のため少し待機
+      }
+      
+      // 全体の進捗バーを更新（必ず正確な進捗数を反映）
+      const currentProgress = i + 1;
+      const currentPercentage = Math.round((currentProgress / likesData.length) * 100);
+      multiBar.update('main', currentProgress, { percentage: currentPercentage });
+      
+      // 処理の10%ごとに強制的に画面をリフレッシュ
+      if (i % Math.max(1, Math.floor(likesData.length / 10)) === 0) {
+        multiBar.redraw();
+      }
     }
     
-    progressBar.update(i + 1);
+    // 完了メッセージを表示
+    multiBar.completeBar('main', '全ての処理が完了しました');
+    multiBar.completeBar('current-file', '処理完了');
+    
+    // 少し待機してから停止
+    await sleep(1000);
+  } finally {
+    // 必ずインターバルをクリアして、プログレスバーを停止
+    clearInterval(redrawInterval);
+    multiBar.stop();
+    
+    // 実行完了後に最終ログを保存
+    saveErrorLogs();
+    
+    // 最終結果を表示
+    const finalListSizes = getListSizes();
+    console.log('すべてのダウンロードが完了しました！');
+    console.log(`スキップリストのツイート数: ${finalListSizes.skipIds}件`);
+    console.log(`存在しないツイート数: ${finalListSizes.notFoundIds}件`);
+    console.log(`センシティブコンテンツ数: ${finalListSizes.sensitiveIds}件`);
+    console.log(`解析エラー数: ${finalListSizes.parseErrorIds}件`);
   }
-  
-  // 実行完了後に最終ログを保存
-  saveErrorLogs();
-  
-  // 最終結果を表示
-  const finalListSizes = getListSizes();
-  console.log('すべてのダウンロードが完了しました！');
-  console.log(`スキップリストのツイート数: ${finalListSizes.skipIds}件`);
-  console.log(`存在しないツイート数: ${finalListSizes.notFoundIds}件`);
-  console.log(`センシティブコンテンツ数: ${finalListSizes.sensitiveIds}件`);
-  console.log(`解析エラー数: ${finalListSizes.parseErrorIds}件`);
 }
 
 // メイン処理を実行
