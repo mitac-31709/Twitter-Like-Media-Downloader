@@ -52,7 +52,7 @@ cp src/config/config.example.js src/config/config.js
 
 ### アプリの実行
 
-1. エクスポートしたlike.jsファイルを `data`ディレクトリに配置
+1. エクスポートしたlike.jsファイルをルートディレクトリに配置
 2. メインスクリプトを実行:
 
 ```bash
