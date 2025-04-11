@@ -1,0 +1,25 @@
+# Node.js 関連
+node_modules/
+npm-debug.log
+package-lock.json
+yarn.lock
+
+# ダウンロードされたメディアファイル
+downloaded_images/
+
+# ログファイル
+logs/
+
+# 環境変数設定
+.env
+
+# OS関連
+.DS_Store
+Thumbs.db
+
+# エディタ関連
+.vscode/
+.idea/
+*.swp
+*.swo
+.history

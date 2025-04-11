@@ -1,0 +1,22 @@
+{
+  "name": "twitter-like-media-downloader",
+  "version": "1.0.0",
+  "description": "Twitterのいいねした投稿から画像やメディアファイル、メタデータを自動的にダウンロードするツール",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "twitter",
+    "media",
+    "download",
+    "images"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cli-progress": "^3.12.0",
+    "twitter-downloader": "^1.1.8"
+  }
+}
