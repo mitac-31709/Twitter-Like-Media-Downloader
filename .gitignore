@@ -4,6 +4,10 @@ npm-debug.log
 package-lock.json
 yarn.lock
 
+# 個人データ
+like.js
+like.js.part.txt
+
 # ダウンロードされたメディアファイル
 downloaded_images/
 
