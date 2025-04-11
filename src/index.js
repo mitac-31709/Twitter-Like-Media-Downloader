@@ -4,6 +4,7 @@ const { loadLikesData, getDownloadedIds } = require('./utils/file-utils');
 const { loadSkipLists, getListSizes, notFoundIds, sensitiveIds } = require('./utils/list-handlers');
 const { processTweetMedia } = require('./services/media-service');
 const { sleep, saveErrorLogs } = require('./utils/error-handlers');
+const { ProgressBar } = require('./utils/progress-bar');
 
 /**
  * 各いいねから画像をダウンロード
@@ -17,6 +18,12 @@ async function downloadAllImages() {
   }
   
   console.log(`合計 ${likesData.length} 件のいいねを処理します...`);
+  
+  const progressBar = new ProgressBar(likesData.length, { 
+    showElapsedTime: true,
+    complete: '■',
+    incomplete: '□'
+  }).start();
   
   // すでにダウンロード済みのツイートIDを取得（メディアとメタデータを別々に）
   const { mediaIds, metadataIds } = getDownloadedIds();
@@ -93,6 +100,8 @@ async function downloadAllImages() {
       // APIを使用しなかった場合は待機しない
       console.log('  ✅ APIを使用しなかったため、待機せずに次の処理に進みます');
     }
+    
+    progressBar.update(i + 1);
   }
   
   // 実行完了後に最終ログを保存
