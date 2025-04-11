@@ -1,4 +1,3 @@
-// filepath: d:\Prog\twitterurldirect\src\utils\download-utils.js
 // メディアダウンロードに関するユーティリティ関数
 const fs = require('fs');
 const path = require('path');

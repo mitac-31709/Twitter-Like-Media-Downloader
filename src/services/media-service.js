@@ -1,4 +1,3 @@
-// filepath: d:\Prog\twitterurldirect\src\services\media-service.js
 // ツイートメディアの処理機能を提供するサービス
 const { fetchTweetInfo } = require('./twitter-api-service');
 const { downloadMediaFromMetadata } = require('../utils/download-utils');

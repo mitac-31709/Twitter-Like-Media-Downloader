@@ -1,4 +1,3 @@
-// filepath: d:\Prog\twitterurldirect\src\index.js
 // Twitterのいいねから画像とメタデータをダウンロードするメインスクリプト
 const { CONFIG } = require('./config/config');
 const { loadLikesData, getDownloadedIds } = require('./utils/file-utils');

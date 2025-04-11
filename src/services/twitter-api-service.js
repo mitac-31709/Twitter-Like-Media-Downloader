@@ -1,4 +1,3 @@
-// filepath: d:\Prog\twitterurldirect\src\services\twitter-api-service.js
 // Twitter APIの呼び出し機能を提供するサービス
 const { TwitterDL } = require('twitter-downloader');
 const { CONFIG } = require('../config/config');

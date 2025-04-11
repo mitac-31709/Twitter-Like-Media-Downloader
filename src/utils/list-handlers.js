@@ -1,4 +1,3 @@
-// filepath: d:\Prog\twitterurldirect\src\utils\list-handlers.js
 // スキップリスト管理のユーティリティ関数
 const fs = require('fs');
 const { CONFIG, dirs } = require('../config/config');

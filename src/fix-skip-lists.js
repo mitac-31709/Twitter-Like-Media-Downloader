@@ -1,4 +1,3 @@
-// filepath: d:\Prog\twitterurldirect\src\fix-skip-lists.js
 // スキップリストを修正するプログラム
 const fs = require('fs');
 const path = require('path');

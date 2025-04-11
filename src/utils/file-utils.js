@@ -1,4 +1,3 @@
-// filepath: d:\Prog\twitterurldirect\src\utils\file-utils.js
 // ファイル操作に関するユーティリティ関数
 const fs = require('fs');
 const path = require('path');
