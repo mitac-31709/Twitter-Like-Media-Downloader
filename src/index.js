@@ -19,19 +19,26 @@ async function downloadAllImages() {
   
   console.log(`合計 ${likesData.length} 件のいいねを処理します...`);
   
+  // デバッグモード時は追加メッセージを表示
+  if (CONFIG.DEBUG) {
+    console.log('デバッグモードが有効です。詳細なログが表示されます。');
+    // 起動時にスクロールが残らないように少し待機
+    await sleep(500);
+  }
+  
   // マルチプログレスバーのインスタンス化（改善版）
   const multiBar = new MultiProgressBar({
     clearOnComplete: false,
     hideCursor: true,
     barLength: 40,
-    fps: 5, // 更新頻度を下げて負荷を抑える
-    synchronousUpdate: true // 同期更新で表示の競合を防止
+    fps: CONFIG.DEBUG ? 10 : 5, // デバッグモードでは更新頻度を上げる
+    synchronousUpdate: true
   });
   
   // 全体の進捗バーを作成
   const totalBar = multiBar.createMainBar(likesData.length);
   
-  // 現在処理中のファイル用バーを作成（表示幅を制限して重複表示を防止）
+  // 現在処理中のファイル用バーを作成
   const fileBar = multiBar.addBar('current-file', 100, {
     format: '{bar} {percentage}% | {filename} | {status}'
   }, {
@@ -39,10 +46,10 @@ async function downloadAllImages() {
     status: '待機中'
   });
   
-  // カスタムロガーを作成（バッファリングオプションを有効化）
+  // カスタムロガーを作成（デバッグモード設定を渡す）
   const logger = createMultiBarLogger(multiBar, {
-    useBuffer: true, // ログをバッファリングして表示の競合を防止
-    debug: CONFIG.DEBUG
+    useBuffer: !CONFIG.DEBUG, // デバッグモードでは即時表示
+    debug: CONFIG.DEBUG      // CONFIG.DEBUGの設定を反映
   });
   
   // すでにダウンロード済みのツイートIDを取得（メディアとメタデータを別々に）
@@ -58,6 +65,9 @@ async function downloadAllImages() {
   console.log(`センシティブコンテンツリスト: ${listSizes.sensitiveIds}件`);
   console.log(`解析エラーリスト: ${listSizes.parseErrorIds}件`);
   
+  // スクロールを防止するために少し待機して、上のログを確実に表示
+  await sleep(500);
+  
   // プログレスバーを開始
   totalBar.start(likesData.length, 0, { status: '処理を開始しています...' });
   
@@ -67,7 +77,7 @@ async function downloadAllImages() {
   // 定期的にプログレスバーを強制的に再描画するためのインターバル
   const redrawInterval = setInterval(() => {
     multiBar.redraw();
-  }, 1000); // 1秒ごとに再描画
+  }, CONFIG.DEBUG ? 500 : 1000); // デバッグモードでは更新頻度を上げる
   
   // プロセス終了時に確実にインターバルをクリア
   process.on('SIGINT', () => {
@@ -86,7 +96,12 @@ async function downloadAllImages() {
       // ファイル名の表示を短くして重複表示を防止
       const displayId = tweetId.length > 10 ? tweetId.substring(0, 10) + '...' : tweetId;
       
-      // 全体の進捗状況を更新（パーセント表示を修正）
+      // デバッグモードでは詳細情報を表示
+      if (CONFIG.DEBUG) {
+        logger.debug(`[詳細] 処理開始: ID=${tweetId}, URL=${tweetUrl}`);
+      }
+      
+      // 全体の進捗状況を更新
       const percentage = Math.min(99, Math.round((i / likesData.length) * 100));
       multiBar.update('main', i, { 
         status: `処理中: ${displayId}`,
@@ -102,14 +117,16 @@ async function downloadAllImages() {
       // 存在しないツイートリストにあるツイートはスキップ
       if (notFoundIds.has(tweetId)) {
         multiBar.updateStatus('current-file', '存在しないツイート - スキップ');
-        await sleep(250); // UI表示のため少し待機
+        if (CONFIG.DEBUG) logger.debug(`[詳細] ツイートID ${tweetId} は存在しないためスキップ`);
+        await sleep(CONFIG.DEBUG ? 500 : 250); // デバッグモードでは表示確認用に長めに待機
         continue;
       }
       
       // センシティブコンテンツリストにあるツイートはスキップ
       if (sensitiveIds.has(tweetId)) {
         multiBar.updateStatus('current-file', 'センシティブコンテンツ - スキップ');
-        await sleep(250); // UI表示のため少し待機
+        if (CONFIG.DEBUG) logger.debug(`[詳細] ツイートID ${tweetId} はセンシティブコンテンツを含むためスキップ`);
+        await sleep(CONFIG.DEBUG ? 500 : 250);
         continue;
       }
       
@@ -120,7 +137,8 @@ async function downloadAllImages() {
       // 両方ともダウンロード済みの場合はスキップ
       if (hasMedia && hasMetadata) {
         multiBar.updateStatus('current-file', '既にダウンロード済み - スキップ');
-        await sleep(250); // UI表示のため少し待機
+        if (CONFIG.DEBUG) logger.debug(`[詳細] ツイートID ${tweetId} は画像とメタデータが両方既に保存済み`);
+        await sleep(CONFIG.DEBUG ? 500 : 250);
         continue;
       }
       
@@ -130,7 +148,6 @@ async function downloadAllImages() {
                                            '画像/動画とメタデータをダウンロード中...');
       
       // ツイートメディアの処理
-      // 進捗状況更新用のコールバックを追加
       const processResult = await processTweetMedia(tweetId, tweetUrl, { 
         hasMedia, 
         hasMetadata,
@@ -142,16 +159,28 @@ async function downloadAllImages() {
           }
         },
         // ロガー関数を渡してログをプログレスバー経由で表示
-        logger: (message) => {
-          logger.debug(message);
-        }
+        logger: CONFIG.DEBUG ? 
+          (message) => logger.debug(`[詳細] ${message}`) : 
+          null
       });
       
       // 処理結果に基づいてステータスを更新
       if (processResult.error) {
-        multiBar.updateStatus('current-file', `エラー: ${processResult.errorType || '不明なエラー'}`);
+        const errorMessage = `エラー: ${processResult.errorType || '不明なエラー'}`;
+        multiBar.updateStatus('current-file', errorMessage);
+        if (CONFIG.DEBUG) logger.debug(`[詳細] ${errorMessage}: ${processResult.error}`);
       } else {
         multiBar.updateStatus('current-file', '完了');
+        
+        // デバッグモードでは処理結果の詳細を表示
+        if (CONFIG.DEBUG) {
+          const resultDetails = {
+            'ダウンロードファイル': processResult.downloadedFiles?.length || 0,
+            'メタデータ保存': processResult.savedMetadata ? 'あり' : 'なし',
+            'API使用': processResult.usedAPI ? 'あり' : 'なし'
+          };
+          logger.debug(`[詳細] 処理結果: ${JSON.stringify(resultDetails)}`);
+        }
       }
       
       // メタデータからのダウンロードかAPIからのダウンロードかを判定
@@ -179,8 +208,8 @@ async function downloadAllImages() {
           await sleep(CONFIG.API_CALL_DELAY);
         }
       } else {
-        // APIを使用しなかった場合は待機しない
-        await sleep(300); // UI表示のため少し待機
+        // APIを使用しなかった場合は短めに待機
+        await sleep(CONFIG.DEBUG ? 500 : 300); // デバッグモードでは表示確認用に長めに待機
       }
       
       // 全体の進捗バーを更新（必ず正確な進捗数を反映）
@@ -188,8 +217,8 @@ async function downloadAllImages() {
       const currentPercentage = Math.round((currentProgress / likesData.length) * 100);
       multiBar.update('main', currentProgress, { percentage: currentPercentage });
       
-      // 処理の10%ごとに強制的に画面をリフレッシュ
-      if (i % Math.max(1, Math.floor(likesData.length / 10)) === 0) {
+      // デバッグモード時は毎回再描画、通常時は処理の10%ごとに再描画
+      if (CONFIG.DEBUG || i % Math.max(1, Math.floor(likesData.length / 10)) === 0) {
         multiBar.redraw();
       }
     }
@@ -199,7 +228,7 @@ async function downloadAllImages() {
     multiBar.completeBar('current-file', '処理完了');
     
     // 少し待機してから停止
-    await sleep(1000);
+    await sleep(CONFIG.DEBUG ? 2000 : 1000);
   } finally {
     // 必ずインターバルをクリアして、プログレスバーを停止
     clearInterval(redrawInterval);

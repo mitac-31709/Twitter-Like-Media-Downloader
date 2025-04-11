@@ -388,7 +388,13 @@ function createMultiBarLogger(multiBar, options = {}) {
   // ログを出力する共通関数
   const logWithMultiBar = (type, args) => {
     if (!multiBar.isActive) {
+      // プログレスバーが非アクティブな場合は直接コンソールに出力
       console[type](...args);
+      return;
+    }
+    
+    // デバッグモードでない場合、debug タイプのログは出力しない
+    if (type === 'debug' && !isDebug) {
       return;
     }
     
@@ -399,15 +405,20 @@ function createMultiBarLogger(multiBar, options = {}) {
       // プログレスバーを一時停止して通常のログを表示
       const stream = multiBar.multiBar.options.stream || process.stdout;
       
-      // カーソル位置を保存してバーをクリア
-      readline.cursorTo(stream, 0);
-      readline.clearScreenDown(stream);
-      
-      // メッセージを出力
-      console[type](...args);
-      
-      // プログレスバーを再描画
-      multiBar.redraw();
+      try {
+        // カーソル位置を保存してバーをクリア
+        readline.cursorTo(stream, 0);
+        readline.clearScreenDown(stream);
+        
+        // メッセージを出力
+        console[type](...args);
+        
+        // プログレスバーを再描画
+        multiBar.redraw();
+      } catch (e) {
+        // 何らかのエラーが発生した場合でもログは表示する
+        console[type](...args);
+      }
     }
   };
   
@@ -416,11 +427,7 @@ function createMultiBarLogger(multiBar, options = {}) {
     info: (...args) => logWithMultiBar('info', args),
     warn: (...args) => logWithMultiBar('warn', args),
     error: (...args) => logWithMultiBar('error', args),
-    debug: (...args) => {
-      if (isDebug) {
-        logWithMultiBar('debug', args);
-      }
-    }
+    debug: (...args) => logWithMultiBar('debug', args)
   };
 }
 
