@@ -98,17 +98,16 @@ function formatTime(milliseconds) {
 function clearMultilineProgress(lines = null) {
   if (!CONFIG.SHOW_PROGRESS) return;
   
-  // 行数が指定されていない場合は前回の行数を使用（最小1行）
-  const linesToClear = lines !== null ? lines : Math.max(1, previousProgressLines);
+  // 行数が指定されていない場合は前回の行数を使用（最小2行）
+  const linesToClear = lines !== null ? lines : Math.max(2, previousProgressLines);
   
-  // 現在行をまずクリア
-  process.stdout.write('\r\x1b[K');
-  
-  // 複数行ある場合は、上に移動しながら各行をクリア
-  if (linesToClear > 1) {
-    for (let i = 1; i < linesToClear; i++) {
-      // 1行上に移動してクリア
-      process.stdout.write('\x1b[1A\r\x1b[K');
+  // 複数行を上から順番にクリア
+  for (let i = 0; i < linesToClear; i++) {
+    // まず現在行をクリア
+    process.stdout.write('\r\x1b[K');
+    // 最後の行以外は1行上に移動
+    if (i < linesToClear - 1) {
+      process.stdout.write('\x1b[1A');
     }
   }
   

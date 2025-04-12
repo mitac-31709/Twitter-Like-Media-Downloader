@@ -10,7 +10,7 @@ const {
   extractMediaUrlsFromMetadata,
   getOriginalMediaUrl
 } = require('./metadata-service');
-const { colorize, ANSI_COLORS } = require('../utils/progress-bar');
+const { colorize, ANSI_COLORS, clearMultilineProgress } = require('../utils/progress-bar');
 
 /**
  * ツイートのメディアを処理する
@@ -40,9 +40,15 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
   };
   
   try {
-    // 進捗表示の更新
-    const updateProgress = (status, progress, details = {}) => {
-      if (onProgress) onProgress(status, progress, details);
+    // 進捗表示の更新（エラーフラグ付き）
+    const updateProgress = (status, progress, details = {}, isError = false) => {
+      if (onProgress) {
+        // エラー状態の場合は赤色で表示
+        if (isError) {
+          status = colorize(`エラー: ${tweetId} - ${status}`, ANSI_COLORS.red);
+        }
+        onProgress(status, progress, details);
+      }
     };
     
     // デバッグログの出力
@@ -81,6 +87,8 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
     if (!tweetData) {
       result.error = 'ツイート情報を取得できませんでした';
       result.errorType = 'not_found';
+      // エラー表示を更新して進捗バーを終了
+      updateProgress(result.error, 100, {}, true);
       return result;
     }
 
@@ -120,12 +128,14 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
     if (!hasMediaEntities) {
       log(`メディアが存在しないツイート: ${tweetId}`);
       result.noMedia = true;
+      updateProgress(`メディアなし: ${tweetId} - メタデータのみ保存`, 100);
       return result;
     }
     
     // すでにメディアをダウンロード済みの場合はスキップ
     if (hasMedia) {
       log(`メディアはすでにダウンロード済み: ${tweetId}`);
+      updateProgress(`すでにダウンロード済み: ${tweetId}`, 100);
       return result;
     }
     
@@ -135,6 +145,7 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
     if (mediaItems.length === 0) {
       log(`抽出可能なメディアがありません: ${tweetId}`);
       result.noMedia = true;
+      updateProgress(`メディアなし: ${tweetId} - メタデータのみ保存`, 100);
       return result;
     }
     
@@ -147,7 +158,12 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
     let successCount = 0;
     for (let i = 0; i < mediaItems.length; i++) {
       const { url, filename } = mediaItems[i];
-      const progress = 25 + Math.floor((i / mediaItems.length) * 70); // 25%～95%の間で進捗を計算
+      // より正確な進捗計算: 25%～95%の範囲で各ファイルの進捗を均等に分配
+      const progressStart = 25;
+      const progressEnd = 95;
+      const progressRange = progressEnd - progressStart;
+      const progressPerItem = progressRange / mediaItems.length;
+      const progress = Math.round(progressStart + (i * progressPerItem));
       
       // オリジナルサイズのURLを取得
       const originalUrl = getOriginalMediaUrl(url);
@@ -158,7 +174,11 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
       // 進捗コールバックを準備
       const itemProgress = (currentBytes, totalBytes) => {
         if (onProgress) {
-          const itemProgressPercent = totalBytes > 0 ? (currentBytes / totalBytes) * 100 : 0;
+          // ファイル単位の進捗計算
+          const fileProgress = totalBytes > 0 ? (currentBytes / totalBytes) : 0;
+          // 全体の進捗に反映
+          const overallProgress = Math.round(progress + (fileProgress * progressPerItem));
+          
           const details = {
             filename,
             currentSize: currentBytes,
@@ -167,7 +187,7 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
             totalItems: mediaItems.length
           };
           
-          onProgress(`ダウンロード中 (${i + 1}/${mediaItems.length})`, progress, details);
+          onProgress(`ダウンロード中 (${i + 1}/${mediaItems.length})`, overallProgress, details);
         }
       };
       
@@ -186,6 +206,8 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
       } catch (error) {
         // 個別のファイルダウンロードエラーを記録
         logError(tweetId, `メディアのダウンロード中にエラーが発生: ${filename} - ${error.message}`);
+        // エラーでもプログレスバーを更新
+        updateProgress(`ダウンロードエラー: ${filename}`, progress + progressPerItem, {}, true);
       }
     }
     
@@ -193,16 +215,23 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
     if (result.downloadedFiles.length === 0 && mediaItems.length > 0) {
       result.error = 'メディアのダウンロードに失敗しました';
       result.errorType = 'download';
+      updateProgress(result.error, 100, {}, true);
+    } else {
+      // 最終進捗を更新
+      updateProgress(`ダウンロード完了 (${successCount}/${mediaItems.length})`, 100);
     }
-    
-    // 最終進捗を更新
-    updateProgress('ダウンロード完了', 100);
     
     return result;
   } catch (error) {
     // エラーハンドリング
     result.error = error.message;
     result.errorType = error.type || 'unknown';
+    
+    // エラーでもプログレスバーを完了状態に
+    if (onProgress) {
+      const errorMessage = `エラー: ${tweetId} - ${error.message}`;
+      onProgress(colorize(errorMessage, ANSI_COLORS.red), 100, {});
+    }
     
     logError(tweetId, tweetUrl, error);
     return result;

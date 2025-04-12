@@ -1,5 +1,6 @@
 // エラー処理とロギングのユーティリティ関数
 const fs = require('fs');
+const readline = require('readline');
 const { CONFIG, dirs } = require('../config/config');
 
 // エラーログ保存用の配列
@@ -8,7 +9,6 @@ let errorLog = [];
 /**
  * エラーを記録する関数
  * @param {string|Error|object} arg1 - ツイートID、エラーメッセージ、またはエラーオブジェクト
- * @param {string|Error} [arg2] - ツイートURLまたはエラーオブジェクト（オプション）
  * @param {Error|string} [arg3] - エラーオブジェクトまたはエラーメッセージ（オプション）
  * @param {string} [arg4] - エラータイプ ('not_found', 'sensitive_content', 'api', 'parse', 'other')
  */
