@@ -1,4 +1,3 @@
-// Twitterのいいねから画像とメタデータをダウンロードするメインスクリプト
 const { CONFIG } = require('./config/config');
 const { loadLikesData, getDownloadedIds } = require('./utils/file-utils');
 const { loadSkipLists, getListSizes, isTweetInAnySkipList, notFoundIds, sensitiveIds, noMediaIds, parseErrorIds, addToNoMediaList } = require('./utils/list-handlers');
