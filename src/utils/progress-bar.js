@@ -146,28 +146,64 @@ function generateComplexProgress(status, progress, details = null) {
     completeColor: 'green',
     incompleteColor: 'gray'
   });
-  
-  // 状態メッセージ
+
+  // 状態メッセージ（APT風のフォーマット）
   const statusMsg = colorize(status, ANSI_COLORS.cyan);
   
-  // 基本的なプログレス表示（1行目）
-  let progressOutput = `${mainBar} ${statusMsg}`;
-  
-  // 詳細情報がある場合は2行目に追加
+  // 処理詳細を表示（2行目）
+  let statusLine = '';
   if (details) {
-    if (details.filename && details.currentSize !== undefined) {
-      // ダウンロードの詳細情報を2行目に表示
-      const downloadProgress = generateDownloadProgress(details);
-      if (downloadProgress) {
-        progressOutput += '\n  ↳ ' + downloadProgress;
-      }
-    } else if (details.status) {
-      // その他のステータス情報
-      progressOutput += '\n  ↳ ' + colorize(details.status, ANSI_COLORS.dim);
+    // カウンター表示
+    if (details.counter) {
+      statusLine += `${colorize(details.counter, ANSI_COLORS.yellow)} `;
+    }
+
+    // 処理タイプ表示
+    if (details.type) {
+      statusLine += `${colorize(details.type, ANSI_COLORS.green)} `;
+    }
+
+    // 処理アイテム
+    if (details.item) {
+      statusLine += `${details.item} `;
     }
   }
-  
-  return progressOutput;
+
+  // 進捗表示（1行目）
+  const progressText = [
+    mainBar,
+    ` ${progress}%`,
+    statusMsg
+  ].join('');
+
+  let output = progressText;
+
+  // 詳細情報（2-3行目）
+  if (statusLine) {
+    output += `\n${statusLine}`;
+  }
+
+  // ダウンロード進捗（3-4行目）
+  if (details?.filename && details?.currentSize !== undefined) {
+    const downloadInfo = generateDownloadProgress(details);
+    if (downloadInfo) {
+      output += `\n  ${colorize('↳', ANSI_COLORS.dim)} ${downloadInfo}`;
+    }
+  }
+
+  // 統計情報（最下行）
+  if (details?.stats) {
+    const { downloaded, errors, skipped, apiCalls } = details.stats;
+    const statsLine = [
+      `${colorize('完了', ANSI_COLORS.green)}: ${downloaded}`,
+      `${colorize('エラー', ANSI_COLORS.red)}: ${errors}`,
+      `${colorize('スキップ', ANSI_COLORS.yellow)}: ${skipped}`,
+      `${colorize('API', ANSI_COLORS.cyan)}: ${apiCalls}`
+    ].join(' | ');
+    output += `\n${colorize('━'.repeat(process.stdout.columns || 80), ANSI_COLORS.dim)}\n${statsLine}`;
+  }
+
+  return output;
 }
 
 /**
@@ -178,17 +214,15 @@ function generateComplexProgress(status, progress, details = null) {
  */
 function displayProgress(status, progress, details = null) {
   if (!CONFIG.SHOW_PROGRESS) return;
-  
+
   // プログレス情報を生成
   const progressOutput = generateComplexProgress(status, progress, details);
-  
+  const lines = progressOutput.split('\n').length;
+
   // 前の表示をクリア
-  process.stdout.write('\r\x1b[K');
-  if (details) {
-    // 詳細情報がある場合は2行分クリア
-    process.stdout.write('\x1b[1A\r\x1b[K');
-  }
-  
+  clearMultilineProgress(Math.max(previousProgressLines, lines));
+  previousProgressLines = lines;
+
   // 新しいプログレスを表示
   process.stdout.write(progressOutput);
 }
@@ -198,7 +232,7 @@ function displayProgress(status, progress, details = null) {
  * @param {number} lines - クリアする行数
  */
 function clearMultilineProgress(lines = 2) {
-  // カーソルを指定行数分上に移動
+  // カーソルを指定行数分上に移動してクリア
   for (let i = 0; i < lines; i++) {
     process.stdout.write('\x1b[K');  // 現在行をクリア
     if (i < lines - 1) {

@@ -157,34 +157,65 @@ async function downloadAllImages() {
       
       // 全体の進捗状況を表示（前の進捗をクリアしてから）
       updateProgressDisplay(
-        `${counter} 🔄 処理中: ${displayId} (⚡${throughputPerMin}/分・⏱️残り約${estimatedMinLeft}分)`, 
-        percentage
+        `処理中: ${displayId}`, 
+        percentage,
+        {
+          counter: `[${i + 1}/${likesData.length}]`,
+          type: processResult?.usedAPI ? 'API取得' : 'キャッシュ',
+          item: tweetUrl,
+          stats: {
+            downloaded: stats.downloaded,
+            errors: stats.errors,
+            skipped: stats.skipped.total,
+            apiCalls: stats.apiCalls
+          }
+        }
       );
-      
-      // スキップリストチェック - list-handlersのユーティリティ関数を使用
+
+      // スキップリストチェック
       if (isTweetInAnySkipList(tweetId)) {
         // スキップ理由を特定
         let skipReason = "スキップ対象";
+        let skipType = "スキップ";
         
         if (notFoundIds.has(tweetId)) {
           skipReason = "存在しないツイート";
+          skipType = "未発見";
           stats.skipped.notFound++;
         } else if (sensitiveIds.has(tweetId)) {
           skipReason = "センシティブコンテンツ";
+          skipType = "制限";
           stats.skipped.sensitive++;
         } else if (noMediaIds.has(tweetId)) {
           skipReason = "メディアが存在しないツイート";
+          skipType = "メディアなし";
           stats.skipped.noMedia++;
         } else if (parseErrorIds.has(tweetId)) {
           skipReason = "解析エラー";
+          skipType = "パースエラー";
           stats.skipped.parseError++;
         } else {
           stats.skipped.inSkipList++;
         }
+
+        // スキップ情報を表示
+        updateProgressDisplay(
+          `${skipReason}のためスキップ: ${displayId}`,
+          percentage,
+          {
+            counter: `[${i + 1}/${likesData.length}]`,
+            type: skipType,
+            item: tweetUrl,
+            stats: {
+              downloaded: stats.downloaded,
+              errors: stats.errors,
+              skipped: stats.skipped.total,
+              apiCalls: stats.apiCalls
+            }
+          }
+        );
         
         logDebug(`${colorize('スキップ', ANSI_COLORS.yellow)}: ${tweetId} - ${skipReason}`);
-        
-        // 高速化: スキップ対象は待機せずに次の処理へ
         stats.skipped.total++;
         continue;
       }
