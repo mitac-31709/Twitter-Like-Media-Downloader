@@ -38,12 +38,49 @@ const stats = {
   cachedResponses: 0
 };
 
+// 前回の進捗表示の行数
+let lastProgressLines = 0;
+
+/**
+ * 進捗表示を更新（前回の表示をクリア）
+ * @param {string} status - 状態メッセージ
+ * @param {number} progress - 進捗率（0-100）
+ * @param {object} details - 詳細情報（オプション）
+ */
+function updateProgressDisplay(status, progress, details = null) {
+  // 前回の表示をクリア（必要に応じて行数を調整）
+  if (lastProgressLines > 0) {
+    // 1行目だけクリア（カーソルを上に移動せず）
+    process.stdout.write('\r\x1b[K');
+    
+    // 複数行ある場合は追加行をクリア
+    if (lastProgressLines > 1) {
+      for (let i = 1; i < lastProgressLines; i++) {
+        process.stdout.write('\x1b[1A\r\x1b[K');
+      }
+    }
+  }
+
+  // 新しい進捗を表示
+  displayProgress(status, progress, details);
+  
+  // 詳細情報があれば行数を2に、なければ1に
+  lastProgressLines = details && details.filename ? 2 : 1;
+  
+  // 100%完了の場合は改行して次の表示に備える
+  if (progress >= 100) {
+    process.stdout.write('\n');
+    lastProgressLines = 0;
+  }
+}
+
 /**
  * 各いいねから画像をダウンロード
  */
 async function downloadAllImages() {
   // 開始時刻を記録
   stats.startTime = Date.now();
+  lastProgressLines = 0;
   
   // いいねデータの読み込み
   const spinner = createSpinner('いいねデータを読み込み中...');
@@ -90,7 +127,7 @@ async function downloadAllImages() {
   
   // 処理終了時のクリーンアップ処理
   process.on('SIGINT', () => {
-    clearMultilineProgress();
+    lastProgressLines = 0; // 進捗表示をリセット
     console.log('\n' + colorize('処理が中断されました。', ANSI_COLORS.yellow));
     displayFinalStats();
     process.exit(0);
@@ -121,8 +158,8 @@ async function downloadAllImages() {
       const itemsLeft = likesData.length - i;
       const estimatedMinLeft = throughputPerMin > 0 ? Math.round((itemsLeft / throughputPerMin) * 10) / 10 : 0;
       
-      // 全体の進捗状況を表示
-      displayProgress(
+      // 全体の進捗状況を表示（前の進捗をクリアしてから）
+      updateProgressDisplay(
         `処理中: ID ${displayId} (${throughputPerMin}/分・残り約${estimatedMinLeft}分)`, 
         percentage
       );
@@ -192,7 +229,8 @@ async function downloadAllImages() {
               statusInfo += ` (${formatFileSize(details.currentSize)} / ${formatFileSize(details.totalSize)})`;
             }
             
-            displayProgress(statusInfo, progress);
+            // 改善された進捗表示関数を使用
+            updateProgressDisplay(statusInfo, progress, details);
           }
         },
         // ロガー関数
@@ -257,7 +295,8 @@ async function downloadAllImages() {
           
           // カウントダウン表示
           for (let sec = cooldownSec; sec > 0; sec -= 1) {
-            displayProgress(`API制限エラー - 待機中... (残り${sec}秒)`, Math.round((cooldownSec - sec) / cooldownSec * 100));
+            // 進捗表示の改善
+            updateProgressDisplay(`API制限エラー - 待機中... (残り${sec}秒)`, Math.round((cooldownSec - sec) / cooldownSec * 100));
             await sleep(1000);
           }
           
@@ -282,12 +321,13 @@ async function downloadAllImages() {
         const successRate = stats.totalProcessed > 0 ? 
           Math.round((stats.downloaded / stats.totalProcessed) * 100) : 0;
         const statsText = `処理:${i+1}/${likesData.length} 成功:${stats.downloaded} スキップ:${stats.skipped.total} エラー:${stats.errors} (成功率:${successRate}%)`;
-        displayProgress(statsText, currentPercentage);
+        // 統計情報表示も改善
+        updateProgressDisplay(statsText, currentPercentage);
       }
     }
     
-    // 完了メッセージを表示
-    clearMultilineProgress();
+    // 進捗表示のリセットと完了メッセージの表示
+    lastProgressLines = 0;
     console.log(colorize('\n処理が完了しました', ANSI_COLORS.brightGreen));
   } finally {
     // 実行完了後に最終ログを保存

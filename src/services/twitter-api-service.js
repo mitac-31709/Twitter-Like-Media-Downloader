@@ -111,7 +111,11 @@ async function fetchTweetInfo(tweetId, tweetUrl) {
   }
 }
 
+// 以前の互換性のために getTweetInfo として fetchTweetInfo をエクスポート
+const getTweetInfo = fetchTweetInfo;
+
 module.exports = {
   callTwitterAPI,
-  fetchTweetInfo
+  fetchTweetInfo,
+  getTweetInfo // 互換性のために両方の名前でエクスポート
 };
