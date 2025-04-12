@@ -161,7 +161,7 @@ async function downloadAllImages() {
         percentage,
         {
           counter: `[${i + 1}/${likesData.length}]`,
-          type: processResult?.usedAPI ? 'API取得' : 'キャッシュ',
+          type: '初期化',
           item: tweetUrl,
           stats: {
             downloaded: stats.downloaded,
@@ -258,7 +258,18 @@ async function downloadAllImages() {
             }
             
             // 改善された進捗表示関数を使用
-            updateProgressDisplay(statusInfo, progress, details);
+            updateProgressDisplay(statusInfo, progress, {
+              ...details,
+              counter: `[${i + 1}/${likesData.length}]`,
+              type: 'ダウンロード',
+              item: tweetUrl,
+              stats: {
+                downloaded: stats.downloaded,
+                errors: stats.errors,
+                skipped: stats.skipped.total,
+                apiCalls: stats.apiCalls
+              }
+            });
           }
         },
         // ロガー関数
