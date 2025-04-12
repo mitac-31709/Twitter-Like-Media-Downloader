@@ -1,7 +1,7 @@
 // Twitterのいいねから画像とメタデータをダウンロードするメインスクリプト
 const { CONFIG } = require('./config/config');
 const { loadLikesData, getDownloadedIds } = require('./utils/file-utils');
-const { loadSkipLists, getListSizes, notFoundIds, sensitiveIds, noMediaIds, parseErrorIds, addToNoMediaList } = require('./utils/list-handlers');
+const { loadSkipLists, getListSizes, isTweetInAnySkipList, notFoundIds, sensitiveIds, noMediaIds, parseErrorIds, addToNoMediaList } = require('./utils/list-handlers');
 const { processTweetMedia } = require('./services/media-service');
 const { sleep, saveErrorLogs } = require('./utils/error-handlers');
 const { 
@@ -97,8 +97,8 @@ async function downloadAllImages() {
         percentage
       );
       
-      // スキップリストチェックを最適化 - 全てのスキップリストをまとめてチェック
-      if (shouldSkipTweet(tweetId)) {
+      // スキップリストチェック - list-handlersのユーティリティ関数を使用
+      if (isTweetInAnySkipList(tweetId)) {
         // スキップ理由を表示
         let skipReason = "スキップ対象";
         
@@ -278,18 +278,6 @@ async function downloadAllImages() {
     console.log(`${colorize('センシティブコンテンツ', ANSI_COLORS.bold)}: ${colorize(finalListSizes.sensitiveIds.toString(), ANSI_COLORS.yellow)} 件`);
     console.log(`${colorize('解析エラー', ANSI_COLORS.bold)}: ${colorize(finalListSizes.parseErrorIds.toString(), ANSI_COLORS.yellow)} 件`);
   }
-}
-
-/**
- * ツイートがスキップ対象かどうか判断する
- * @param {string} tweetId - ツイートID
- * @returns {boolean} スキップすべきならtrue
- */
-function shouldSkipTweet(tweetId) {
-  return notFoundIds.has(tweetId) || 
-         sensitiveIds.has(tweetId) || 
-         noMediaIds.has(tweetId) || 
-         parseErrorIds.has(tweetId);
 }
 
 // メイン処理を実行
