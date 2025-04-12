@@ -51,6 +51,7 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
     };
     
     // ツイート情報の取得（APIまたはローカルキャッシュから）
+    let tweetResponse = null;
     let tweetData = null;
     
     // 既存のメタデータを利用するか判断
@@ -63,13 +64,17 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
         // メタデータが見つからない場合、APIから再取得
         result.usedAPI = true;
         updateProgress('ツイート情報をAPI経由で取得中...', 10);
-        tweetData = await getTweetInfo(tweetId, tweetUrl);
+        tweetResponse = await getTweetInfo(tweetId, tweetUrl);
+        // レスポンスからメタデータを取り出す
+        tweetData = tweetResponse.success ? tweetResponse.metadata : null;
       }
     } else {
       // APIからツイート情報を取得
       result.usedAPI = true;
       updateProgress('ツイート情報をAPI経由で取得中...', 10);
-      tweetData = await getTweetInfo(tweetId, tweetUrl);
+      tweetResponse = await getTweetInfo(tweetId, tweetUrl);
+      // レスポンスからメタデータを取り出す
+      tweetData = tweetResponse.success ? tweetResponse.metadata : null;
     }
     
     // ツイートが見つからない場合
@@ -77,6 +82,29 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
       result.error = 'ツイート情報を取得できませんでした';
       result.errorType = 'not_found';
       return result;
+    }
+
+    // デバッグ出力：実際のデータ構造を確認
+    if (CONFIG.DEBUG) {
+      log(`ツイートデータ構造: ${JSON.stringify(Object.keys(tweetData))}`);
+      if (tweetData.extended_entities) {
+        log(`extended_entities: ${JSON.stringify(tweetData.extended_entities)}`);
+      }
+      if (tweetData.entities) {
+        log(`entities: ${JSON.stringify(tweetData.entities)}`);
+      }
+    }
+    
+    // ツイートAPIのレスポンス構造に応じてメディアエンティティを取得
+    // TwitterDLのレスポンス構造はextended_entitiesまたはentities.mediaにメディア情報が含まれる
+    if (!tweetData.mediaEntities) {
+      if (tweetData.extended_entities && tweetData.extended_entities.media) {
+        tweetData.mediaEntities = tweetData.extended_entities.media;
+      } else if (tweetData.entities && tweetData.entities.media) {
+        tweetData.mediaEntities = tweetData.entities.media;
+      } else {
+        tweetData.mediaEntities = [];
+      }
     }
     
     // メディアを含むかチェック（メディアエンティティがあるかどうか）
@@ -162,7 +190,7 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
     }
     
     // ダウンロード結果の判定
-    if (result.downloadedFiles.length === 0) {
+    if (result.downloadedFiles.length === 0 && mediaItems.length > 0) {
       result.error = 'メディアのダウンロードに失敗しました';
       result.errorType = 'download';
     }

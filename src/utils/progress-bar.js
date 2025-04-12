@@ -93,17 +93,27 @@ function formatTime(milliseconds) {
 
 /**
  * 複数行のプログレスバーをクリアする
- * @param {number} lines - クリアする行数
+ * @param {number} lines - クリアする行数（指定がない場合はpreviousProgressLinesを使用）
  */
-function clearMultilineProgress(lines = 2) {
+function clearMultilineProgress(lines = null) {
   if (!CONFIG.SHOW_PROGRESS) return;
   
-  // 指定された行数だけカーソルを上に移動し、その行をクリア
-  for (let i = 0; i < lines; i++) {
-    process.stdout.write('\r\x1b[K\x1b[1A');
-  }
-  // 最後に現在行をクリア
+  // 行数が指定されていない場合は前回の行数を使用（最小1行）
+  const linesToClear = lines !== null ? lines : Math.max(1, previousProgressLines);
+  
+  // 現在行をまずクリア
   process.stdout.write('\r\x1b[K');
+  
+  // 複数行ある場合は、上に移動しながら各行をクリア
+  if (linesToClear > 1) {
+    for (let i = 1; i < linesToClear; i++) {
+      // 1行上に移動してクリア
+      process.stdout.write('\x1b[1A\r\x1b[K');
+    }
+  }
+  
+  // 進捗表示の行数をリセット
+  previousProgressLines = 0;
 }
 
 /**
@@ -116,7 +126,7 @@ function clearMultilineProgress(lines = 2) {
 function displayProgress(status, percent, details = null, width = 30) {
   if (!CONFIG.SHOW_PROGRESS) return;
   
-  // 前の行をクリアして新しいプログレスを表示
+  // 現在行をクリア
   process.stdout.write('\r\x1b[K');
 
   // 進捗バーを計算
@@ -141,6 +151,7 @@ function displayProgress(status, percent, details = null, width = 30) {
   let progressOutput = `${progressBar} ${statusMsg}`;
   
   // 詳細情報がある場合は追加
+  let currentLines = 1;
   if (details && details.filename && details.currentSize !== undefined) {
     const sizeInfo = `${formatFileSize(details.currentSize)}${details.totalSize ? ' / ' + formatFileSize(details.totalSize) : ''}`;
     
@@ -151,14 +162,15 @@ function displayProgress(status, percent, details = null, width = 30) {
       : filename;
     
     progressOutput += `\n  ${colorize(truncatedFilename, ANSI_COLORS.blue)} ${colorize(sizeInfo, ANSI_COLORS.yellow)}`;
-    previousProgressLines = 2;  // 2行表示する
-  } else {
-    previousProgressLines = 1;  // 1行表示
+    currentLines = 2;  // 2行表示する
   }
+  
+  // 行数を記録
+  previousProgressLines = currentLines;
   
   process.stdout.write(progressOutput);
   
-  // 進捗が100%なら改行を入れる
+  // 進捗が100%なら改行を入れて表示をクリア
   if (percent >= 100) {
     process.stdout.write('\n');
     previousProgressLines = 0;

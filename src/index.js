@@ -48,29 +48,15 @@ let lastProgressLines = 0;
  * @param {object} details - 詳細情報（オプション）
  */
 function updateProgressDisplay(status, progress, details = null) {
-  // 前回の表示をクリア（必要に応じて行数を調整）
-  if (lastProgressLines > 0) {
-    // 1行目だけクリア（カーソルを上に移動せず）
-    process.stdout.write('\r\x1b[K');
-    
-    // 複数行ある場合は追加行をクリア
-    if (lastProgressLines > 1) {
-      for (let i = 1; i < lastProgressLines; i++) {
-        process.stdout.write('\x1b[1A\r\x1b[K');
-      }
-    }
-  }
-
+  // 前回の進捗表示をクリア
+  clearMultilineProgress();
+  
   // 新しい進捗を表示
   displayProgress(status, progress, details);
-  
-  // 詳細情報があれば行数を2に、なければ1に
-  lastProgressLines = details && details.filename ? 2 : 1;
   
   // 100%完了の場合は改行して次の表示に備える
   if (progress >= 100) {
     process.stdout.write('\n');
-    lastProgressLines = 0;
   }
 }
 
