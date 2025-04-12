@@ -92,88 +92,120 @@ function formatTime(milliseconds) {
 }
 
 /**
- * 複数行のプログレスバーをクリアする
- * @param {number} lines - クリアする行数（指定がない場合はpreviousProgressLinesを使用）
+ * プログレスバーを生成する
+ * @param {number} progress - 進捗（0-100）
+ * @param {number} width - プログレスバーの幅
+ * @param {Object} options - オプション（色など）
+ * @returns {string} プログレスバー文字列
  */
-function clearMultilineProgress(lines = null) {
-  if (!CONFIG.SHOW_PROGRESS) return;
+function generateProgressBar(progress, width, options = {}) {
+  const completed = Math.floor(progress / 100 * width);
+  const remaining = width - completed;
   
-  // 行数が指定されていない場合は前回の行数を使用（最小2行）
-  const linesToClear = lines !== null ? lines : Math.max(2, previousProgressLines);
+  const completeChar = '█';
+  const incompleteChar = '░';
   
-  // 複数行を上から順番にクリア
-  for (let i = 0; i < linesToClear; i++) {
-    // まず現在行をクリア
-    process.stdout.write('\r\x1b[K');
-    // 最後の行以外は1行上に移動
-    if (i < linesToClear - 1) {
-      process.stdout.write('\x1b[1A');
+  const completeColor = options.completeColor || 'green';
+  const incompleteColor = options.incompleteColor || 'dim';
+  
+  const filledBar = colorize(completeChar.repeat(completed), ANSI_COLORS[completeColor]);
+  const emptyBar = colorize(incompleteChar.repeat(remaining), ANSI_COLORS[incompleteColor]);
+  
+  return `[${filledBar}${emptyBar}] ${colorize(`${progress}%`.padStart(4), progress >= 100 ? ANSI_COLORS.green : ANSI_COLORS.yellow)}`;
+}
+
+/**
+ * ダウンロード進捗の詳細情報を生成する
+ * @param {Object} details - 詳細情報オブジェクト
+ * @returns {string} ダウンロード進捗の文字列
+ */
+function generateDownloadProgress(details) {
+  if (!details.filename || details.currentSize === undefined) return '';
+  
+  const sizeInfo = `${formatFileSize(details.currentSize)}${details.totalSize ? ' / ' + formatFileSize(details.totalSize) : ''}`;
+  
+  // ファイル名は短縮表示
+  const filename = details.filename;
+  const truncatedFilename = filename.length > 30 
+    ? filename.substring(0, 15) + '...' + filename.substring(filename.length - 15) 
+    : filename;
+  
+  return `${colorize(truncatedFilename, ANSI_COLORS.blue)} ${colorize(sizeInfo, ANSI_COLORS.yellow)}`;
+}
+
+/**
+ * 複雑なプログレスバーを生成する
+ * @param {string} status - 状態メッセージ
+ * @param {number} progress - 進捗（0-100）
+ * @param {Object} details - 追加の詳細情報
+ * @returns {string} プログレスバー文字列
+ */
+function generateComplexProgress(status, progress, details = null) {
+  // メインプログレスバー
+  const mainBar = generateProgressBar(progress, 40, {
+    completeColor: 'green',
+    incompleteColor: 'gray'
+  });
+  
+  // 状態メッセージ
+  const statusMsg = colorize(status, ANSI_COLORS.cyan);
+  
+  // 基本的なプログレス表示（1行目）
+  let progressOutput = `${mainBar} ${statusMsg}`;
+  
+  // 詳細情報がある場合は2行目に追加
+  if (details) {
+    if (details.filename && details.currentSize !== undefined) {
+      // ダウンロードの詳細情報を2行目に表示
+      const downloadProgress = generateDownloadProgress(details);
+      if (downloadProgress) {
+        progressOutput += '\n  ↳ ' + downloadProgress;
+      }
+    } else if (details.status) {
+      // その他のステータス情報
+      progressOutput += '\n  ↳ ' + colorize(details.status, ANSI_COLORS.dim);
     }
   }
   
-  // 進捗表示の行数をリセット
-  previousProgressLines = 0;
+  return progressOutput;
 }
 
 /**
  * プログレスバーを表示する（コンソール出力）
  * @param {string} status - 状態メッセージ
- * @param {number} percent - 進捗（0-100）
+ * @param {number} progress - 進捗（0-100）
  * @param {Object} details - 追加の詳細情報
- * @param {number} [width=30] - プログレスバーの幅
  */
-function displayProgress(status, percent, details = null, width = 30) {
+function displayProgress(status, progress, details = null) {
   if (!CONFIG.SHOW_PROGRESS) return;
   
-  // 現在行をクリア
+  // プログレス情報を生成
+  const progressOutput = generateComplexProgress(status, progress, details);
+  
+  // 前の表示をクリア
   process.stdout.write('\r\x1b[K');
-
-  // 進捗バーを計算
-  const completed = Math.floor(percent / 100 * width);
-  const remaining = width - completed;
-  
-  // 塗りつぶした部分と空の部分に分けて表示
-  const completeChar = '█';
-  const incompleteChar = '░';
-  
-  const filledBar = colorize(completeChar.repeat(completed), ANSI_COLORS.green);
-  const emptyBar = colorize(incompleteChar.repeat(remaining), ANSI_COLORS.dim);
-  const percentStr = colorize(`${percent}%`.padStart(4), percent >= 100 ? ANSI_COLORS.green : ANSI_COLORS.yellow);
-  
-  // 進捗バーを表示
-  const progressBar = `[${filledBar}${emptyBar}] ${percentStr} `;
-  
-  // 状態メッセージをボールド表示
-  const statusMsg = colorize(status, ANSI_COLORS.bold);
-  
-  // 基本的なプログレス表示
-  let progressOutput = `${progressBar} ${statusMsg}`;
-  
-  // 詳細情報がある場合は追加
-  let currentLines = 1;
-  if (details && details.filename && details.currentSize !== undefined) {
-    const sizeInfo = `${formatFileSize(details.currentSize)}${details.totalSize ? ' / ' + formatFileSize(details.totalSize) : ''}`;
-    
-    // ファイル名は短縮表示
-    const filename = details.filename;
-    const truncatedFilename = filename.length > 30 
-      ? filename.substring(0, 15) + '...' + filename.substring(filename.length - 15) 
-      : filename;
-    
-    progressOutput += `\n  ${colorize(truncatedFilename, ANSI_COLORS.blue)} ${colorize(sizeInfo, ANSI_COLORS.yellow)}`;
-    currentLines = 2;  // 2行表示する
+  if (details) {
+    // 詳細情報がある場合は2行分クリア
+    process.stdout.write('\x1b[1A\r\x1b[K');
   }
   
-  // 行数を記録
-  previousProgressLines = currentLines;
-  
+  // 新しいプログレスを表示
   process.stdout.write(progressOutput);
-  
-  // 進捗が100%なら改行を入れて表示をクリア
-  if (percent >= 100) {
-    process.stdout.write('\n');
-    previousProgressLines = 0;
+}
+
+/**
+ * 複数行のプログレスバーをクリアする
+ * @param {number} lines - クリアする行数
+ */
+function clearMultilineProgress(lines = 2) {
+  // カーソルを指定行数分上に移動
+  for (let i = 0; i < lines; i++) {
+    process.stdout.write('\x1b[K');  // 現在行をクリア
+    if (i < lines - 1) {
+      process.stdout.write('\x1b[1A');  // 1行上に移動
+    }
   }
+  process.stdout.write('\r');  // カーソルを行頭に戻す
 }
 
 // スピナーのアニメーションパターン

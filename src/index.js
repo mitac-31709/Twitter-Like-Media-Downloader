@@ -48,15 +48,23 @@ let lastProgressLines = 0;
  * @param {object} details - 詳細情報（オプション）
  */
 function updateProgressDisplay(status, progress, details = null) {
-  // 前回の進捗表示をクリア
-  clearMultilineProgress();
-  
-  // 新しい進捗を表示
-  displayProgress(status, progress, details);
-  
-  // 100%完了の場合は改行して次の表示に備える
-  if (progress >= 100) {
-    process.stdout.write('\n');
+  try {
+    // 前回の進捗表示をクリア（2行分）
+    clearMultilineProgress(2);
+    
+    // 新しい進捗を表示
+    displayProgress(status, progress, details);
+    
+    // 100%完了の場合は改行して次の表示に備える
+    if (progress >= 100) {
+      process.stdout.write('\n');
+      if (details) {
+        process.stdout.write('\n');
+      }
+    }
+  } catch (err) {
+    // プログレスバー表示で問題が発生しても処理を継続
+    console.error('プログレス表示エラー:', err);
   }
 }
 
@@ -132,9 +140,12 @@ async function downloadAllImages() {
       // 現在の進捗率を計算
       const percentage = Math.min(99, Math.round((i / likesData.length) * 100));
       
-      // ファイル名の表示を短くして重複表示を防止
-      const displayId = tweetId.length > 10 ? tweetId.substring(0, 10) + '...' : tweetId;
+      // カウンター表示の整形（現在/合計の形式）
+      const counter = `[${i + 1}/${likesData.length}]`;
       
+      // ファイル名の表示を短くして重複表示を防止
+      const displayId = `🔹 ${tweetId}`;
+
       // 経過時間とスループットの計算
       const elapsedMs = Date.now() - stats.startTime;
       const elapsedMin = elapsedMs / 60000;
@@ -146,7 +157,7 @@ async function downloadAllImages() {
       
       // 全体の進捗状況を表示（前の進捗をクリアしてから）
       updateProgressDisplay(
-        `処理中: ID ${displayId} (${throughputPerMin}/分・残り約${estimatedMinLeft}分)`, 
+        `${counter} 🔄 処理中: ${displayId} (⚡${throughputPerMin}/分・⏱️残り約${estimatedMinLeft}分)`, 
         percentage
       );
       
@@ -225,18 +236,18 @@ async function downloadAllImages() {
       
       // 処理結果に基づいてステータスを更新
       if (processResult.error) {
-        const errorMessage = `エラー: ${processResult.errorType || '不明なエラー'}`;
-        console.log(`${colorize('エラー', ANSI_COLORS.red)}: ${tweetId} - ${errorMessage}: ${processResult.error}`);
+        const errorType = processResult.errorType || '不明なエラー';
+        console.log(`${colorize('❌ エラー', ANSI_COLORS.red)}: ${tweetId} - ${errorType}: ${processResult.error}`);
         stats.errors++;
       } else if (processResult.noMedia) {
         // メディアが存在しないツイートの場合
-        console.log(`${colorize('メディアなし', ANSI_COLORS.yellow)}: ${tweetId} - メタデータのみ保存`);
+        console.log(`${colorize('ℹ️ メディアなし', ANSI_COLORS.yellow)}: ${tweetId} - メタデータのみ保存`);
         addToNoMediaList(tweetId);
         stats.skipped.noMedia++;
         stats.skipped.total++;
         stats.metadataSaved++;
       } else {
-        logDebug(`${colorize('完了', ANSI_COLORS.green)}: ${tweetId}`);
+        logDebug(`${colorize('✅ 完了', ANSI_COLORS.green)}: ${tweetId}`);
         stats.downloaded++;
         
         // 統計情報の更新
@@ -244,13 +255,13 @@ async function downloadAllImages() {
           stats.mediaFilesDownloaded += processResult.downloadedFiles.length;
           // ファイルごとの詳細をログに残す
           processResult.downloadedFiles.forEach(file => {
-            console.log(`${colorize('ダウンロード', ANSI_COLORS.green)}: ${tweetId} - ${file}`);
+            console.log(`${colorize('📥 ダウンロード', ANSI_COLORS.green)}: ${tweetId} - ${file}`);
           });
         }
         
         if (processResult.savedMetadata) {
           stats.metadataSaved++;
-          logDebug(`${colorize('メタデータ保存', ANSI_COLORS.green)}: ${tweetId}`);
+          logDebug(`${colorize('📋 メタデータ保存', ANSI_COLORS.green)}: ${tweetId}`);
         }
       }
       
@@ -268,7 +279,7 @@ async function downloadAllImages() {
         // API呼び出しエラーの場合はカウンターを増加
         if (processResult.errorType === 'api') {
           consecutiveApiErrorCount++;
-          console.log(`${colorize('API エラー', ANSI_COLORS.red)}: ${consecutiveApiErrorCount}回連続`);
+          console.log(`${colorize('🚫 API エラー', ANSI_COLORS.red)}: ${consecutiveApiErrorCount}回連続`);
         } else {
           // エラーでなければカウンターをリセット
           consecutiveApiErrorCount = 0;
