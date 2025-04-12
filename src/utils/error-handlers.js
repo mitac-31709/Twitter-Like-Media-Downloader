@@ -7,24 +7,46 @@ let errorLog = [];
 
 /**
  * エラーを記録する関数
- * @param {string} tweetId - ツイートID
- * @param {string} url - ツイートURL
- * @param {Error|string} error - エラーオブジェクトまたはエラーメッセージ
- * @param {string} errorType - エラータイプ ('not_found', 'sensitive_content', 'api', 'parse', 'other')
+ * @param {string|Error|object} arg1 - ツイートID、エラーメッセージ、またはエラーオブジェクト
+ * @param {string|Error} [arg2] - ツイートURLまたはエラーオブジェクト（オプション）
+ * @param {Error|string} [arg3] - エラーオブジェクトまたはエラーメッセージ（オプション）
+ * @param {string} [arg4] - エラータイプ ('not_found', 'sensitive_content', 'api', 'parse', 'other')
  */
-function logError(tweetId, url, error, errorType = 'other') {
+function logError(arg1, arg2, arg3, arg4) {
   try {
     const timestamp = new Date().toISOString();
+    let tweetId, url, error, errorType = 'other';
+    
+    // 引数のパターンを判断
+    if (typeof arg1 === 'string' && arg2 && arg3) {
+      // 4引数または3引数パターン: logError(tweetId, url, error, [errorType])
+      tweetId = arg1;
+      url = arg2;
+      error = arg3;
+      if (arg4) errorType = arg4;
+    } else if (typeof arg1 === 'string' && arg2) {
+      // 2引数パターン: logError(tweetId, error)
+      tweetId = arg1;
+      url = 'unknown';
+      error = arg2;
+    } else {
+      // 1引数パターン: logError(error)
+      tweetId = 'unknown';
+      url = 'unknown';
+      error = arg1;
+    }
     
     // エラーオブジェクト作成
     const errorObj = {
       timestamp,
       tweetId,
       url,
-      error: error.message || (typeof error === 'string' ? error : JSON.stringify(error)),
+      error: error && error.message ? error.message : 
+             (typeof error === 'string' ? error : 
+             (error ? JSON.stringify(error) : 'Unknown error')),
       errorType,
       isNotFound: errorType === 'not_found', // 後方互換性のため
-      stack: error.stack || new Error().stack
+      stack: error && error.stack ? error.stack : new Error().stack
     };
     
     // ロギング

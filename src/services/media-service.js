@@ -1,13 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const { CONFIG } = require('../config/config');
+const { CONFIG, dirs } = require('../config/config');
 const { formatFileSize } = require('../utils/progress-bar');
 const { addToSkipList, addToNotFoundList, addToSensitiveList, addToParseErrorList } = require('../utils/list-handlers');
 const { logError } = require('../utils/error-handlers');
 
 // ダウンロードディレクトリの設定
-const DOWNLOAD_DIR = path.join(process.cwd(), CONFIG.DOWNLOAD_DIR);
+const DOWNLOAD_DIR = dirs.downloadDir;
 
 /**
  * ファイルサイズをフォーマット (直接progress-barモジュールから取得)
