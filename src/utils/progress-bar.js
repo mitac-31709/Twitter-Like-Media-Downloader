@@ -1,6 +1,4 @@
-const cliProgress = require('cli-progress');
 const readline = require('readline');
-const chalk = require('chalk');
 const { CONFIG } = require('../config/config');
 
 // ANSIカラーコードの定義
@@ -35,16 +33,26 @@ const ANSI_COLORS = {
   bold: '\x1b[1m',
   dim: '\x1b[2m',
   italic: '\x1b[3m',
-  underline: '\x1b[4m'
+  underline: '\x1b[4m',
+  blink: '\x1b[5m',
+  inverse: '\x1b[7m',
+  hidden: '\x1b[8m',
+  strikethrough: '\x1b[9m',
+  // カラーマッピング（名前から実際のコードへの変換用）
+  gray: '\x1b[2m'
 };
+
+// 前回の進捗表示の行数
+let previousProgressLines = 0;
 
 /**
  * テキストにカラーを適用するユーティリティ関数
  * @param {string} text - 装飾するテキスト
- * @param {string} colorCode - ANSIカラーコード
+ * @param {string} color - 色コード、またはカラー名
  * @returns {string} カラーが適用されたテキスト
  */
-function colorize(text, colorCode) {
+function colorize(text, color) {
+  const colorCode = ANSI_COLORS[color] || color || ANSI_COLORS.reset;
   return `${colorCode}${text}${ANSI_COLORS.reset}`;
 }
 
@@ -84,130 +92,6 @@ function formatTime(milliseconds) {
 }
 
 /**
- * カラフルなプログレスバーを生成する
- * @param {number} progress - 進捗（0-100）
- * @param {number} barLength - プログレスバーの長さ
- * @param {Object} options - 追加オプション
- * @return {string} プログレスバー文字列
- */
-function generateProgressBar(progress, barLength = 30, options = {}) {
-  // 進捗が範囲内に収まるように調整
-  const normalizedProgress = Math.max(0, Math.min(100, progress));
-  
-  // 完了したセグメントの数を計算
-  const filledLength = Math.round((barLength * normalizedProgress) / 100);
-  
-  // プログレスバーを構築
-  const completeChar = options.completeChar || '█';
-  const incompleteChar = options.incompleteChar || '░';
-  
-  // カラー設定（オプション）
-  const completeColor = options.completeColor || 'green';
-  const incompleteColor = options.incompleteColor || 'gray';
-  
-  // 色付きのバー部分を生成
-  const bar = 
-    chalk[completeColor](completeChar.repeat(filledLength)) + 
-    chalk[incompleteColor](incompleteChar.repeat(barLength - filledLength));
-  
-  // パーセンテージを追加（右寄せ）
-  const percent = normalizedProgress.toFixed(1).padStart(5) + '%';
-  
-  return `[${bar}] ${chalk.bold(percent)}`;
-}
-
-/**
- * ダウンロード状態を表すプログレスバーを生成
- * @param {Object} downloadInfo - ダウンロード情報
- * @return {string} フォーマットされたプログレス情報
- */
-function generateDownloadProgress(downloadInfo) {
-  if (!downloadInfo || !downloadInfo.currentSize) {
-    return '';
-  }
-  
-  const { filename, currentSize, totalSize } = downloadInfo;
-  
-  // 進捗率を計算
-  const progress = totalSize > 0 ? (currentSize / totalSize) * 100 : 0;
-  
-  // プログレスバーを生成
-  const progressBar = generateProgressBar(progress, 20, { 
-    completeColor: 'cyan', 
-    incompleteColor: 'gray' 
-  });
-  
-  // ダウンロード速度情報（この実装では省略）
-  
-  // ファイル情報を追加
-  const sizeInfo = `${formatFileSize(currentSize)}${totalSize ? ' / ' + formatFileSize(totalSize) : ''}`;
-  
-  // ファイル名は短縮表示
-  const truncatedFilename = filename.length > 30 
-    ? filename.substring(0, 15) + '...' + filename.substring(filename.length - 15) 
-    : filename;
-  
-  return `${progressBar} ${chalk.blue(truncatedFilename)} ${chalk.yellow(sizeInfo)}`;
-}
-
-/**
- * メインプログレスバーと詳細情報を含む複合プログレスを生成
- * @param {string} status - 現在の状態メッセージ
- * @param {number} progress - 全体の進捗（0-100）
- * @param {Object} details - 詳細情報（ダウンロード情報など）
- * @return {string} フォーマットされたプログレス情報
- */
-function generateComplexProgress(status, progress, details = null) {
-  // メインプログレスバー
-  const mainBar = generateProgressBar(progress, 40, {
-    completeColor: 'green',
-    incompleteColor: 'gray'
-  });
-  
-  // 状態メッセージ
-  const statusMsg = chalk.bold(status);
-  
-  // 基本的なプログレス表示
-  let progressOutput = `${mainBar} ${statusMsg}`;
-  
-  // 詳細情報がある場合は追加
-  if (details) {
-    // ダウンロード情報がある場合
-    if (details.filename && (details.currentSize !== undefined)) {
-      const downloadProgress = generateDownloadProgress(details);
-      if (downloadProgress) {
-        progressOutput += '\n  ' + downloadProgress;
-      }
-    }
-    
-    // その他の詳細情報があれば追加可能
-  }
-  
-  return progressOutput;
-}
-
-/**
- * プログレスバーを表示する（コンソール出力）
- * @param {string} status - 状態メッセージ
- * @param {number} progress - 進捗（0-100）
- * @param {Object} details - 追加の詳細情報
- */
-function displayProgress(status, progress, details = null) {
-  if (!CONFIG.SHOW_PROGRESS) return;
-  
-  // 前の行をクリアして新しいプログレスを表示
-  process.stdout.write('\r\x1b[K');
-  
-  const progressOutput = generateComplexProgress(status, progress, details);
-  process.stdout.write(progressOutput);
-  
-  // 進捗が100%なら改行を入れる
-  if (progress >= 100) {
-    process.stdout.write('\n');
-  }
-}
-
-/**
  * 複数行のプログレスバーをクリアする
  * @param {number} lines - クリアする行数
  */
@@ -220,6 +104,65 @@ function clearMultilineProgress(lines = 2) {
   }
   // 最後に現在行をクリア
   process.stdout.write('\r\x1b[K');
+}
+
+/**
+ * プログレスバーを表示する（コンソール出力）
+ * @param {string} status - 状態メッセージ
+ * @param {number} percent - 進捗（0-100）
+ * @param {Object} details - 追加の詳細情報
+ * @param {number} [width=30] - プログレスバーの幅
+ */
+function displayProgress(status, percent, details = null, width = 30) {
+  if (!CONFIG.SHOW_PROGRESS) return;
+  
+  // 前の行をクリアして新しいプログレスを表示
+  process.stdout.write('\r\x1b[K');
+
+  // 進捗バーを計算
+  const completed = Math.floor(percent / 100 * width);
+  const remaining = width - completed;
+  
+  // 塗りつぶした部分と空の部分に分けて表示
+  const completeChar = '█';
+  const incompleteChar = '░';
+  
+  const filledBar = colorize(completeChar.repeat(completed), ANSI_COLORS.green);
+  const emptyBar = colorize(incompleteChar.repeat(remaining), ANSI_COLORS.dim);
+  const percentStr = colorize(`${percent}%`.padStart(4), percent >= 100 ? ANSI_COLORS.green : ANSI_COLORS.yellow);
+  
+  // 進捗バーを表示
+  const progressBar = `[${filledBar}${emptyBar}] ${percentStr} `;
+  
+  // 状態メッセージをボールド表示
+  const statusMsg = colorize(status, ANSI_COLORS.bold);
+  
+  // 基本的なプログレス表示
+  let progressOutput = `${progressBar} ${statusMsg}`;
+  
+  // 詳細情報がある場合は追加
+  if (details && details.filename && details.currentSize !== undefined) {
+    const sizeInfo = `${formatFileSize(details.currentSize)}${details.totalSize ? ' / ' + formatFileSize(details.totalSize) : ''}`;
+    
+    // ファイル名は短縮表示
+    const filename = details.filename;
+    const truncatedFilename = filename.length > 30 
+      ? filename.substring(0, 15) + '...' + filename.substring(filename.length - 15) 
+      : filename;
+    
+    progressOutput += `\n  ${colorize(truncatedFilename, ANSI_COLORS.blue)} ${colorize(sizeInfo, ANSI_COLORS.yellow)}`;
+    previousProgressLines = 2;  // 2行表示する
+  } else {
+    previousProgressLines = 1;  // 1行表示
+  }
+  
+  process.stdout.write(progressOutput);
+  
+  // 進捗が100%なら改行を入れる
+  if (percent >= 100) {
+    process.stdout.write('\n');
+    previousProgressLines = 0;
+  }
 }
 
 // スピナーのアニメーションパターン
@@ -278,9 +221,6 @@ module.exports = {
   formatTime,
   colorize,
   ANSI_COLORS,
-  generateProgressBar,
-  generateDownloadProgress,
-  generateComplexProgress,
   displayProgress,
   clearMultilineProgress,
   createSpinner,
