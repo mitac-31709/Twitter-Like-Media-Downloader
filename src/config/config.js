@@ -47,6 +47,9 @@ const CONFIG = {
   // 解析エラーが発生したツイートIDを記録するファイルパス (デフォルト: logs/parse-error-ids.json)
   PARSE_ERROR_LIST_PATH: path.join(dirs.logsDir, 'parse-error-ids.json'),
   
+  // メディア（画像・動画）がないツイートのIDを記録するファイルパス (デフォルト: logs/no-media-ids.json)
+  NO_MEDIA_LIST_PATH: path.join(dirs.logsDir, 'no-media-ids.json'),
+  
   // デバッグモード (詳細情報を表示) (デフォルト: false)
   DEBUG: false,
   

@@ -3,7 +3,7 @@ const path = require('path');
 const axios = require('axios');
 const { CONFIG, dirs } = require('../config/config');
 const { formatFileSize } = require('../utils/progress-bar');
-const { addToSkipList, addToNotFoundList, addToSensitiveList, addToParseErrorList } = require('../utils/list-handlers');
+const { addToSkipList, addToNotFoundList, addToSensitiveList, addToParseErrorList, addToNoMediaList } = require('../utils/list-handlers');
 const { logError } = require('../utils/error-handlers');
 
 // ダウンロードディレクトリの設定
@@ -31,6 +31,7 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
     usedAPI: false,
     downloadedFiles: [],
     savedMetadata: false,
+    noMedia: false, // メディアがない場合にtrueにするフラグを追加
     error: null,
     errorType: null
   };
@@ -54,6 +55,16 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
         metadata = JSON.parse(metadataContent);
         updateProgress('メタデータ読み込み完了', 10);
         log(`メタデータファイルを読み込みました: ${tweetId}`);
+        
+        // メタデータからメディアの有無を確認
+        if (metadata.media && metadata.media.length === 0 || metadata.mediaCount === 0) {
+          // メディアがない場合はここで処理を終了
+          log(`このツイートにはメディアが含まれていません: ${tweetId}`);
+          updateProgress('メディアが含まれていないツイート', 100);
+          // メディアなしフラグを設定
+          result.noMedia = true;
+          return result;
+        }
       } catch (err) {
         // メタデータ読み込みエラーは記録するが続行
         log(`メタデータ解析エラー: ${err.message}`);
@@ -112,7 +123,8 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
           } catch (err) {
             // 個別ファイルのダウンロードエラーは記録するが続行
             log(`メディアダウンロードエラー: ${err.message}`);
-            logError(`メディアダウンロードエラー(${tweetId}-${mediaIndex}): ${err.message}`);
+            // tweetIdを明示的に指定して、「unknown」になるのを防ぐ
+            logError(tweetId, tweetUrl, `メディアダウンロードエラー(${mediaIndex}番目): ${err.message}`, 'media_error');
           }
         }
         
@@ -135,6 +147,28 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
     
     // 実際のAPI呼び出しコードは、現在のプロジェクトに合わせて実装してください
     // 例: const tweetData = await fetchTweetData(tweetId, tweetUrl);
+    
+    // ここでメタデータファイルが存在するかチェックし、存在する場合は読み込む
+    if (fs.existsSync(metadataPath) && !metadata) {
+      try {
+        const metadataContent = fs.readFileSync(metadataPath, 'utf-8');
+        metadata = JSON.parse(metadataContent);
+        
+        // メタデータからメディアの有無を確認
+        if (metadata.media && metadata.media.length === 0) {
+          // メディアがない場合はここで処理を終了
+          log(`このツイートにはメディアが含まれていません: ${tweetId}`);
+          updateProgress('メディアが含まれていないツイート', 100);
+          // メディアなしリストに追加
+          addToNoMediaList(tweetId);
+          result.noMedia = true;
+          return result;
+        }
+      } catch (err) {
+        // エラーは無視して続行（APIで再取得する）
+        log(`保存済みメタデータの読み込みに失敗しました: ${err.message}`);
+      }
+    }
     
     // テスト用のダミーデータ
     const dummyMediaUrls = [
@@ -164,6 +198,10 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
       // メディアのダウンロード
       if (!hasMedia) {
         updateProgress(`メディアをダウンロード中 (0/${dummyMediaUrls.length})`, 40);
+        
+        // ダウンロードエラーカウンター
+        let downloadErrorCount = 0;
+        const totalMediaCount = dummyMediaUrls.length;
         
         for (let i = 0; i < dummyMediaUrls.length; i++) {
           const mediaUrl = dummyMediaUrls[i];
@@ -206,7 +244,29 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
           } catch (err) {
             // 個別ファイルのダウンロードエラーは記録するが続行
             log(`メディアダウンロードエラー: ${err.message}`);
-            logError(`メディアダウンロードエラー(${tweetId}-${mediaIndex}): ${err.message}`);
+            // tweetIdを明示的に指定して、「unknown」になるのを防ぐ
+            logError(tweetId, tweetUrl, `メディアダウンロードエラー(${mediaIndex}番目): ${err.message}`, 'media_error');
+            downloadErrorCount++;
+          }
+        }
+        
+        // すべてのダウンロードが失敗した場合、メディアがないと判断
+        if (downloadErrorCount === totalMediaCount && totalMediaCount > 0) {
+          log(`すべてのメディアダウンロードに失敗しました。メディアがないと判断します: ${tweetId}`);
+          result.noMedia = true;
+          addToNoMediaList(tweetId);
+          
+          // メタデータが保存されている場合、メディア配列を空に更新
+          if (fs.existsSync(metadataPath)) {
+            try {
+              const metadataContent = fs.readFileSync(metadataPath, 'utf-8');
+              const currentMetadata = JSON.parse(metadataContent);
+              currentMetadata.media = [];
+              fs.writeFileSync(metadataPath, JSON.stringify(currentMetadata, null, 2), 'utf-8');
+              log(`メタデータを更新しました（メディアなし）: ${tweetId}`);
+            } catch (err) {
+              log(`メタデータの更新に失敗しました: ${err.message}`);
+            }
           }
         }
         
@@ -218,7 +278,25 @@ async function processTweetMedia(tweetId, tweetUrl, options = {}) {
       // メディアURLが取得できない場合
       updateProgress('メディアが見つかりませんでした', 100);
       log(`メディアが見つかりませんでした: ${tweetId}`);
-      addToNotFoundList(tweetId);
+      
+      // メディアなしフラグを設定
+      result.noMedia = true;
+      
+      // 専用のリスト（メディアなし）に追加
+      addToNoMediaList(tweetId);
+      
+      // メタデータが保存されている場合、メディア配列を空に更新
+      if (fs.existsSync(metadataPath)) {
+        try {
+          const metadataContent = fs.readFileSync(metadataPath, 'utf-8');
+          const currentMetadata = JSON.parse(metadataContent);
+          currentMetadata.media = [];
+          fs.writeFileSync(metadataPath, JSON.stringify(currentMetadata, null, 2), 'utf-8');
+          log(`メタデータを更新しました（メディアなし）: ${tweetId}`);
+        } catch (err) {
+          log(`メタデータの更新に失敗しました: ${err.message}`);
+        }
+      }
     }
     
     // すべての処理完了

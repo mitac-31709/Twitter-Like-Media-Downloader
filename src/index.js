@@ -1,7 +1,7 @@
 // Twitterのいいねから画像とメタデータをダウンロードするメインスクリプト
 const { CONFIG } = require('./config/config');
 const { loadLikesData, getDownloadedIds } = require('./utils/file-utils');
-const { loadSkipLists, getListSizes, notFoundIds, sensitiveIds } = require('./utils/list-handlers');
+const { loadSkipLists, getListSizes, notFoundIds, sensitiveIds, noMediaIds, parseErrorIds, addToNoMediaList } = require('./utils/list-handlers');
 const { processTweetMedia } = require('./services/media-service');
 const { sleep, saveErrorLogs } = require('./utils/error-handlers');
 const { 
@@ -97,17 +97,22 @@ async function downloadAllImages() {
         percentage
       );
       
-      // 存在しないツイートリストにあるツイートはスキップ
-      if (notFoundIds.has(tweetId)) {
-        console.log(`${colorize('スキップ', ANSI_COLORS.yellow)}: ${tweetId} - 存在しないツイート`);
-        await sleep(CONFIG.DEBUG ? 500 : 250);
-        stats.skipped++;
-        continue;
-      }
-      
-      // センシティブコンテンツリストにあるツイートはスキップ
-      if (sensitiveIds.has(tweetId)) {
-        console.log(`${colorize('スキップ', ANSI_COLORS.yellow)}: ${tweetId} - センシティブコンテンツ`);
+      // スキップリストチェックを最適化 - 全てのスキップリストをまとめてチェック
+      if (shouldSkipTweet(tweetId)) {
+        // スキップ理由を表示
+        let skipReason = "スキップ対象";
+        
+        if (notFoundIds.has(tweetId)) {
+          skipReason = "存在しないツイート";
+        } else if (sensitiveIds.has(tweetId)) {
+          skipReason = "センシティブコンテンツ";
+        } else if (noMediaIds.has(tweetId)) {
+          skipReason = "メディアが存在しないツイート";
+        } else if (parseErrorIds.has(tweetId)) {
+          skipReason = "解析エラー";
+        }
+        
+        console.log(`${colorize('スキップ', ANSI_COLORS.yellow)}: ${tweetId} - ${skipReason}`);
         await sleep(CONFIG.DEBUG ? 500 : 250);
         stats.skipped++;
         continue;
@@ -162,6 +167,11 @@ async function downloadAllImages() {
         const errorMessage = `エラー: ${processResult.errorType || '不明なエラー'}`;
         console.log(`${colorize('エラー', ANSI_COLORS.red)}: ${tweetId} - ${errorMessage}: ${processResult.error}`);
         stats.errors++;
+      } else if (processResult.noMedia) {
+        // メディアが存在しないツイートの場合
+        console.log(`${colorize('メディアなし', ANSI_COLORS.yellow)}: ${tweetId} - メタデータのみ保存`);
+        addToNoMediaList(tweetId);
+        stats.skipped++;
       } else {
         console.log(`${colorize('完了', ANSI_COLORS.green)}: ${tweetId}`);
         stats.downloaded++;
@@ -210,6 +220,9 @@ async function downloadAllImages() {
         }
       } else {
         // APIを使用しなかった場合は短めに待機
+        if (!processResult.error && !processResult.noMedia) {
+          console.log(`${colorize('保存済みデータ使用', ANSI_COLORS.green)}: API呼び出しを省略`);
+        }
         await sleep(CONFIG.DEBUG ? 500 : 300); 
       }
       
@@ -265,6 +278,18 @@ async function downloadAllImages() {
     console.log(`${colorize('センシティブコンテンツ', ANSI_COLORS.bold)}: ${colorize(finalListSizes.sensitiveIds.toString(), ANSI_COLORS.yellow)} 件`);
     console.log(`${colorize('解析エラー', ANSI_COLORS.bold)}: ${colorize(finalListSizes.parseErrorIds.toString(), ANSI_COLORS.yellow)} 件`);
   }
+}
+
+/**
+ * ツイートがスキップ対象かどうか判断する
+ * @param {string} tweetId - ツイートID
+ * @returns {boolean} スキップすべきならtrue
+ */
+function shouldSkipTweet(tweetId) {
+  return notFoundIds.has(tweetId) || 
+         sensitiveIds.has(tweetId) || 
+         noMediaIds.has(tweetId) || 
+         parseErrorIds.has(tweetId);
 }
 
 // メイン処理を実行

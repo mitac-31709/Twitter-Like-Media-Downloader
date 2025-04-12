@@ -10,6 +10,8 @@ let notFoundIds = new Set();
 let sensitiveIds = new Set();
 // 解析エラーが発生したツイートのIDセット
 let parseErrorIds = new Set();
+// メディア（画像・動画）がないツイートのIDセット
+let noMediaIds = new Set();
 
 /**
  * すべてのスキップリストを読み込む
@@ -42,6 +44,13 @@ function loadSkipLists() {
       const parseErrorList = JSON.parse(fs.readFileSync(CONFIG.PARSE_ERROR_LIST_PATH, CONFIG.ENCODING));
       parseErrorList.forEach(id => parseErrorIds.add(id));
       console.log(`解析エラーリストを読み込みました: ${parseErrorIds.size}件`);
+    }
+    
+    // メディア（画像・動画）がないツイートリスト
+    if (fs.existsSync(CONFIG.NO_MEDIA_LIST_PATH)) {
+      const noMediaList = JSON.parse(fs.readFileSync(CONFIG.NO_MEDIA_LIST_PATH, CONFIG.ENCODING));
+      noMediaList.forEach(id => noMediaIds.add(id));
+      console.log(`メディアがないツイートリストを読み込みました: ${noMediaIds.size}件`);
     }
   } catch (e) {
     console.error(`スキップリストの読み込み中にエラーが発生しました: ${e.message}`);
@@ -113,6 +122,22 @@ function saveParseErrorList() {
 }
 
 /**
+ * メディアがないツイートリストを保存する
+ */
+function saveNoMediaList() {
+  try {
+    // ディレクトリが存在しない場合は作成
+    if (!fs.existsSync(dirs.logsDir)) {
+      fs.mkdirSync(dirs.logsDir, { recursive: true });
+    }
+    
+    fs.writeFileSync(CONFIG.NO_MEDIA_LIST_PATH, JSON.stringify([...noMediaIds], null, 2));
+  } catch (e) {
+    console.error(`メディアがないツイートリストの保存中にエラーが発生しました: ${e.message}`);
+  }
+}
+
+/**
  * スキップリストに追加
  * @param {string} tweetId - ツイートID
  */
@@ -149,6 +174,15 @@ function addToParseErrorList(tweetId) {
 }
 
 /**
+ * メディアがないツイートリストに追加
+ * @param {string} tweetId - ツイートID
+ */
+function addToNoMediaList(tweetId) {
+  noMediaIds.add(tweetId);
+  saveNoMediaList();
+}
+
+/**
  * スキップリストの現在のサイズを取得
  * @returns {Object} 各リストのサイズ
  */
@@ -157,7 +191,8 @@ function getListSizes() {
     skipIds: skipIds.size,
     notFoundIds: notFoundIds.size,
     sensitiveIds: sensitiveIds.size,
-    parseErrorIds: parseErrorIds.size
+    parseErrorIds: parseErrorIds.size,
+    noMediaIds: noMediaIds.size
   };
 }
 
@@ -170,7 +205,8 @@ function isTweetInAnySkipList(tweetId) {
   return skipIds.has(tweetId) || 
          notFoundIds.has(tweetId) || 
          sensitiveIds.has(tweetId) || 
-         parseErrorIds.has(tweetId);
+         parseErrorIds.has(tweetId) ||
+         noMediaIds.has(tweetId);
 }
 
 /**
@@ -183,7 +219,8 @@ function checkTweetInLists(tweetId) {
     inSkipList: skipIds.has(tweetId),
     inNotFoundList: notFoundIds.has(tweetId),
     inSensitiveList: sensitiveIds.has(tweetId),
-    inParseErrorList: parseErrorIds.has(tweetId)
+    inParseErrorList: parseErrorIds.has(tweetId),
+    inNoMediaList: noMediaIds.has(tweetId)
   };
 }
 
@@ -193,10 +230,12 @@ module.exports = {
   saveNotFoundList,
   saveSensitiveList,
   saveParseErrorList,
+  saveNoMediaList,
   addToSkipList,
   addToNotFoundList,
   addToSensitiveList,
   addToParseErrorList,
+  addToNoMediaList,
   getListSizes,
   isTweetInAnySkipList,
   checkTweetInLists,
@@ -204,5 +243,6 @@ module.exports = {
   skipIds,
   notFoundIds,
   sensitiveIds,
-  parseErrorIds
+  parseErrorIds,
+  noMediaIds
 };
