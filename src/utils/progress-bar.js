@@ -222,6 +222,57 @@ function clearMultilineProgress(lines = 2) {
   process.stdout.write('\r\x1b[K');
 }
 
+// スピナーのアニメーションパターン
+const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+let spinnerInterval;
+let currentSpinnerFrame = 0;
+
+/**
+ * スピナーを表示する
+ * @param {string} text - スピナーと共に表示するテキスト
+ * @returns {object} スピナー制御オブジェクト
+ */
+function createSpinner(text) {
+  // 既存のスピナーを停止
+  if (spinnerInterval) {
+    clearInterval(spinnerInterval);
+    process.stdout.write('\r\x1b[K');
+  }
+  
+  // 新しいスピナーを開始
+  const spinner = {
+    text,
+    stopped: false
+  };
+  
+  spinnerInterval = setInterval(() => {
+    if (spinner.stopped) return;
+    
+    const frame = spinnerFrames[currentSpinnerFrame];
+    process.stdout.write(`\r${colorize(frame, ANSI_COLORS.cyan)} ${spinner.text}`);
+    
+    currentSpinnerFrame = (currentSpinnerFrame + 1) % spinnerFrames.length;
+  }, 100);
+  
+  return spinner;
+}
+
+/**
+ * スピナーを停止する
+ * @param {object} spinner - createSpinnerで作成したスピナーオブジェクト
+ * @param {string} [finalText] - スピナー停止時に表示する最終テキスト（指定しない場合は元のテキスト）
+ */
+function stopSpinner(spinner, finalText) {
+  if (!spinner) return;
+  
+  spinner.stopped = true;
+  clearInterval(spinnerInterval);
+  
+  // 完了表示
+  const displayText = finalText || spinner.text;
+  process.stdout.write(`\r${colorize('✓', ANSI_COLORS.green)} ${displayText}\n`);
+}
+
 module.exports = {
   formatFileSize,
   formatTime,
@@ -231,5 +282,7 @@ module.exports = {
   generateDownloadProgress,
   generateComplexProgress,
   displayProgress,
-  clearMultilineProgress
+  clearMultilineProgress,
+  createSpinner,
+  stopSpinner
 };

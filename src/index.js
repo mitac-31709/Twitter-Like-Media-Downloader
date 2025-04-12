@@ -3,73 +3,101 @@ const { CONFIG } = require('./config/config');
 const { loadLikesData, getDownloadedIds } = require('./utils/file-utils');
 const { loadSkipLists, getListSizes, isTweetInAnySkipList, notFoundIds, sensitiveIds, noMediaIds, parseErrorIds, addToNoMediaList } = require('./utils/list-handlers');
 const { processTweetMedia } = require('./services/media-service');
-const { sleep, saveErrorLogs } = require('./utils/error-handlers');
+const { sleep, saveErrorLogs, logDebug } = require('./utils/error-handlers');
 const { 
   formatFileSize, 
   formatTime, 
   colorize, 
   ANSI_COLORS,
   displayProgress,
-  clearMultilineProgress
+  clearMultilineProgress,
+  createSpinner,
+  stopSpinner
 } = require('./utils/progress-bar');
+
+/**
+ * ツイート処理の統計情報
+ */
+const stats = {
+  startTime: 0,
+  totalProcessed: 0,
+  skipped: {
+    total: 0,
+    alreadyDownloaded: 0,
+    inSkipList: 0,
+    notFound: 0,
+    sensitive: 0,
+    parseError: 0,
+    noMedia: 0
+  },
+  downloaded: 0,
+  errors: 0,
+  mediaFilesDownloaded: 0,
+  metadataSaved: 0,
+  apiCalls: 0,
+  cachedResponses: 0
+};
 
 /**
  * 各いいねから画像をダウンロード
  */
 async function downloadAllImages() {
+  // 開始時刻を記録
+  stats.startTime = Date.now();
+  
   // いいねデータの読み込み
+  const spinner = createSpinner('いいねデータを読み込み中...');
   const likesData = loadLikesData();
+  stopSpinner(spinner);
+  
   if (!likesData) {
-    console.error('いいねデータの読み込みに失敗しました。');
+    console.error(colorize('いいねデータの読み込みに失敗しました。', ANSI_COLORS.brightRed));
     process.exit(1);
   }
   
-  console.log(`${colorize('ダウンロードツール', ANSI_COLORS.bold)} - 合計 ${colorize(likesData.length.toString(), ANSI_COLORS.cyan)} 件のいいねを処理します...`);
+  console.log(`${colorize('━━━━━━━━━━━━━━━━━━━ ダウンロード開始 ━━━━━━━━━━━━━━━━━━━', ANSI_COLORS.cyan)}`);
+  console.log(`${colorize('ダウンロードツール', ANSI_COLORS.bold)} - 合計 ${colorize(likesData.length.toString(), ANSI_COLORS.cyan)} 件のいいねを処理します`);
   
   // デバッグモード時は追加メッセージを表示
   if (CONFIG.DEBUG) {
-    console.log(`${colorize('デバッグモード', ANSI_COLORS.yellow)}が有効です。詳細なログが表示されます。`);
-    // 起動時にスクロールが残らないように少し待機
-    await sleep(500);
+    console.log(`${colorize('デバッグモード', ANSI_COLORS.yellow)}が有効です (詳細ログを出力)`);
   }
   
   // すでにダウンロード済みのツイートIDを取得（メディアとメタデータを別々に）
+  const loadingSpinner = createSpinner('ダウンロード済みファイルをスキャン中...');
   const { mediaIds, metadataIds } = getDownloadedIds();
+  stopSpinner(loadingSpinner);
+  
   console.log(`既存のダウンロード済みメディア: ${colorize(mediaIds.size.toString(), ANSI_COLORS.green)}件`);
   console.log(`既存の保存済みメタデータ: ${colorize(metadataIds.size.toString(), ANSI_COLORS.green)}件`);
   
   // スキップリストを読み込む
+  const skipSpinner = createSpinner('スキップリストを読み込み中...');
   loadSkipLists();
   const listSizes = getListSizes();
+  stopSpinner(skipSpinner);
+  
   console.log(`スキップリストのツイート: ${colorize(listSizes.skipIds.toString(), ANSI_COLORS.yellow)}件`);
   console.log(`存在しないツイートリスト: ${colorize(listSizes.notFoundIds.toString(), ANSI_COLORS.yellow)}件`);
   console.log(`センシティブコンテンツリスト: ${colorize(listSizes.sensitiveIds.toString(), ANSI_COLORS.yellow)}件`);
   console.log(`解析エラーリスト: ${colorize(listSizes.parseErrorIds.toString(), ANSI_COLORS.yellow)}件`);
-  
-  // スクロールを防止するために少し待機して、上のログを確実に表示
-  await sleep(500);
+  console.log(`メディアなしツイートリスト: ${colorize(listSizes.noMediaIds.toString(), ANSI_COLORS.yellow)}件`);
+  console.log(`${colorize('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', ANSI_COLORS.cyan)}`);
+  console.log(`処理を開始します...`);
   
   // エラーカウンター（連続APIエラーを検出するため）
   let consecutiveApiErrorCount = 0;
   
-  // 処理統計情報
-  const stats = {
-    startTime: Date.now(),
-    totalProcessed: 0,
-    skipped: 0,
-    downloaded: 0,
-    errors: 0,
-    mediaFilesDownloaded: 0,
-    metadataSaved: 0
-  };
-
   // 処理終了時のクリーンアップ処理
   process.on('SIGINT', () => {
+    clearMultilineProgress();
     console.log('\n' + colorize('処理が中断されました。', ANSI_COLORS.yellow));
+    displayFinalStats();
     process.exit(0);
   });
   
   try {
+    // ツイートの一括処理
     for (let i = 0; i < likesData.length; i++) {
       const likeItem = likesData[i].like;
       const tweetId = likeItem.tweetId;
@@ -77,6 +105,9 @@ async function downloadAllImages() {
       
       // 統計情報の更新
       stats.totalProcessed++;
+      
+      // 現在の進捗率を計算
+      const percentage = Math.min(99, Math.round((i / likesData.length) * 100));
       
       // ファイル名の表示を短くして重複表示を防止
       const displayId = tweetId.length > 10 ? tweetId.substring(0, 10) + '...' : tweetId;
@@ -91,7 +122,6 @@ async function downloadAllImages() {
       const estimatedMinLeft = throughputPerMin > 0 ? Math.round((itemsLeft / throughputPerMin) * 10) / 10 : 0;
       
       // 全体の進捗状況を表示
-      const percentage = Math.min(99, Math.round((i / likesData.length) * 100));
       displayProgress(
         `処理中: ID ${displayId} (${throughputPerMin}/分・残り約${estimatedMinLeft}分)`, 
         percentage
@@ -99,22 +129,29 @@ async function downloadAllImages() {
       
       // スキップリストチェック - list-handlersのユーティリティ関数を使用
       if (isTweetInAnySkipList(tweetId)) {
-        // スキップ理由を表示
+        // スキップ理由を特定
         let skipReason = "スキップ対象";
         
         if (notFoundIds.has(tweetId)) {
           skipReason = "存在しないツイート";
+          stats.skipped.notFound++;
         } else if (sensitiveIds.has(tweetId)) {
           skipReason = "センシティブコンテンツ";
+          stats.skipped.sensitive++;
         } else if (noMediaIds.has(tweetId)) {
           skipReason = "メディアが存在しないツイート";
+          stats.skipped.noMedia++;
         } else if (parseErrorIds.has(tweetId)) {
           skipReason = "解析エラー";
+          stats.skipped.parseError++;
+        } else {
+          stats.skipped.inSkipList++;
         }
         
-        console.log(`${colorize('スキップ', ANSI_COLORS.yellow)}: ${tweetId} - ${skipReason}`);
-        await sleep(CONFIG.DEBUG ? 500 : 250);
-        stats.skipped++;
+        logDebug(`${colorize('スキップ', ANSI_COLORS.yellow)}: ${tweetId} - ${skipReason}`);
+        
+        // 高速化: スキップ対象は待機せずに次の処理へ
+        stats.skipped.total++;
         continue;
       }
       
@@ -124,9 +161,9 @@ async function downloadAllImages() {
       
       // 両方ともダウンロード済みの場合はスキップ
       if (hasMedia && hasMetadata) {
-        console.log(`${colorize('スキップ', ANSI_COLORS.yellow)}: ${tweetId} - 既にダウンロード済み`);
-        await sleep(CONFIG.DEBUG ? 500 : 250);
-        stats.skipped++;
+        logDebug(`${colorize('スキップ', ANSI_COLORS.yellow)}: ${tweetId} - 既にダウンロード済み`);
+        stats.skipped.alreadyDownloaded++;
+        stats.skipped.total++;
         continue;
       }
       
@@ -135,7 +172,7 @@ async function downloadAllImages() {
                         hasMetadata ? '画像/動画のみダウンロード中...' : 
                         '画像/動画とメタデータをダウンロード中...';
       
-      console.log(`${colorize('処理中', ANSI_COLORS.cyan)}: ${tweetId} - ${statusText}`);
+      logDebug(`${colorize('処理中', ANSI_COLORS.cyan)}: ${tweetId} - ${statusText}`);
       
       // ツイートメディアの処理
       const processResult = await processTweetMedia(tweetId, tweetUrl, { 
@@ -171,19 +208,33 @@ async function downloadAllImages() {
         // メディアが存在しないツイートの場合
         console.log(`${colorize('メディアなし', ANSI_COLORS.yellow)}: ${tweetId} - メタデータのみ保存`);
         addToNoMediaList(tweetId);
-        stats.skipped++;
+        stats.skipped.noMedia++;
+        stats.skipped.total++;
+        stats.metadataSaved++;
       } else {
-        console.log(`${colorize('完了', ANSI_COLORS.green)}: ${tweetId}`);
+        logDebug(`${colorize('完了', ANSI_COLORS.green)}: ${tweetId}`);
         stats.downloaded++;
         
         // 統計情報の更新
         if (processResult.downloadedFiles?.length) {
           stats.mediaFilesDownloaded += processResult.downloadedFiles.length;
+          // ファイルごとの詳細をログに残す
+          processResult.downloadedFiles.forEach(file => {
+            console.log(`${colorize('ダウンロード', ANSI_COLORS.green)}: ${tweetId} - ${file}`);
+          });
         }
         
         if (processResult.savedMetadata) {
           stats.metadataSaved++;
+          logDebug(`${colorize('メタデータ保存', ANSI_COLORS.green)}: ${tweetId}`);
         }
+      }
+      
+      // API利用の統計を更新
+      if (processResult.usedAPI) {
+        stats.apiCalls++;
+      } else if (!processResult.error) {
+        stats.cachedResponses++;
       }
       
       // メタデータからのダウンロードかAPIからのダウンロードかを判定
@@ -215,69 +266,68 @@ async function downloadAllImages() {
         } else {
           // APIを使用した場合のみ待機（制限を避けるため）
           const delaySec = CONFIG.API_CALL_DELAY / 1000;
-          console.log(`API制限待機中... (${delaySec}秒)`);
+          logDebug(`API制限待機中... (${delaySec}秒)`);
           await sleep(CONFIG.API_CALL_DELAY);
         }
       } else {
-        // APIを使用しなかった場合は短めに待機
+        // APIを使用しなかった場合は待機なし（高速化）
         if (!processResult.error && !processResult.noMedia) {
-          console.log(`${colorize('保存済みデータ使用', ANSI_COLORS.green)}: API呼び出しを省略`);
+          logDebug(`${colorize('保存済みデータ使用', ANSI_COLORS.green)}: API呼び出し省略`);
         }
-        await sleep(CONFIG.DEBUG ? 500 : 300); 
       }
       
-      // 全体の進捗バーを更新（必ず正確な進捗数を反映）
-      const currentProgress = i + 1;
-      const currentPercentage = Math.round((currentProgress / likesData.length) * 100);
-      
-      // 統計情報の更新
-      const successRate = stats.totalProcessed > 0 ? 
-        Math.round((stats.downloaded / stats.totalProcessed) * 100) : 0;
-      const statsText = `成功:${stats.downloaded} スキップ:${stats.skipped} エラー:${stats.errors} (成功率:${successRate}%)`;
-      
+      // 統計情報の更新（10件ごとに表示）
       if (i % 10 === 0 || i === likesData.length - 1) {
+        const currentPercentage = Math.round(((i + 1) / likesData.length) * 100);
+        const successRate = stats.totalProcessed > 0 ? 
+          Math.round((stats.downloaded / stats.totalProcessed) * 100) : 0;
+        const statsText = `処理:${i+1}/${likesData.length} 成功:${stats.downloaded} スキップ:${stats.skipped.total} エラー:${stats.errors} (成功率:${successRate}%)`;
         displayProgress(statsText, currentPercentage);
       }
     }
     
-    // 統計情報の計算
-    const totalTime = Date.now() - stats.startTime;
-    const totalMinutes = (totalTime / 60000).toFixed(2);
-    const throughput = stats.totalProcessed > 0 ? 
-      (stats.totalProcessed / totalMinutes).toFixed(2) : 0;
-    const successRate = stats.totalProcessed > 0 ? 
-      Math.round((stats.downloaded / stats.totalProcessed) * 100) : 0;
-    
     // 完了メッセージを表示
-    const summaryText = `処理完了 (${totalMinutes}分, ${throughput}件/分, 成功率:${successRate}%)`;
-    console.log(summaryText);
-
-    // 少し待機する
-    await sleep(CONFIG.DEBUG ? 2000 : 1000);
+    clearMultilineProgress();
+    console.log(colorize('\n処理が完了しました', ANSI_COLORS.brightGreen));
   } finally {
     // 実行完了後に最終ログを保存
     saveErrorLogs();
     
     // 最終結果を表示
-    const finalListSizes = getListSizes();
-    const totalTime = (Date.now() - stats.startTime) / 1000;
-    const timeStr = formatTime(Date.now() - stats.startTime);
-    
-    console.log(colorize('すべてのダウンロードが完了しました！', ANSI_COLORS.brightGreen));
-    console.log(colorize('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', ANSI_COLORS.green));
-    console.log(`${colorize('処理時間', ANSI_COLORS.bold)}: ${colorize(timeStr, ANSI_COLORS.green)} (${totalTime.toFixed(1)}秒)`);
-    console.log(`${colorize('処理項目数', ANSI_COLORS.bold)}: ${colorize(stats.totalProcessed.toString(), ANSI_COLORS.yellow)} 件`);
-    console.log(`${colorize('ダウンロード成功', ANSI_COLORS.bold)}: ${colorize(stats.downloaded.toString(), ANSI_COLORS.green)} 件`);
-    console.log(`${colorize('スキップ', ANSI_COLORS.bold)}: ${colorize(stats.skipped.toString(), ANSI_COLORS.cyan)} 件`);
-    console.log(`${colorize('エラー', ANSI_COLORS.bold)}: ${colorize(stats.errors.toString(), ANSI_COLORS.red)} 件`);
-    console.log(`${colorize('ダウンロードファイル', ANSI_COLORS.bold)}: ${colorize(stats.mediaFilesDownloaded.toString(), ANSI_COLORS.yellow)} 件`);
-    console.log(`${colorize('保存メタデータ', ANSI_COLORS.bold)}: ${colorize(stats.metadataSaved.toString(), ANSI_COLORS.yellow)} 件`);
-    console.log(colorize('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', ANSI_COLORS.green));
-    console.log(`${colorize('スキップリスト', ANSI_COLORS.bold)}: ${colorize(finalListSizes.skipIds.toString(), ANSI_COLORS.yellow)} 件`);
-    console.log(`${colorize('存在しないツイート', ANSI_COLORS.bold)}: ${colorize(finalListSizes.notFoundIds.toString(), ANSI_COLORS.yellow)} 件`);
-    console.log(`${colorize('センシティブコンテンツ', ANSI_COLORS.bold)}: ${colorize(finalListSizes.sensitiveIds.toString(), ANSI_COLORS.yellow)} 件`);
-    console.log(`${colorize('解析エラー', ANSI_COLORS.bold)}: ${colorize(finalListSizes.parseErrorIds.toString(), ANSI_COLORS.yellow)} 件`);
+    displayFinalStats();
   }
+}
+
+/**
+ * 最終的な統計情報を表示
+ */
+function displayFinalStats() {
+  const finalListSizes = getListSizes();
+  const totalTime = (Date.now() - stats.startTime) / 1000;
+  const timeStr = formatTime(Date.now() - stats.startTime);
+  
+  console.log(colorize('\n━━━━━━━━━━━━━━━━━━━ 処理結果 ━━━━━━━━━━━━━━━━━━━', ANSI_COLORS.cyan));
+  console.log(`${colorize('処理時間', ANSI_COLORS.bold)}: ${colorize(timeStr, ANSI_COLORS.green)} (${totalTime.toFixed(1)}秒)`);
+  console.log(`${colorize('処理項目数', ANSI_COLORS.bold)}: ${colorize(stats.totalProcessed.toString(), ANSI_COLORS.yellow)} 件`);
+  console.log(`${colorize('ダウンロード成功', ANSI_COLORS.bold)}: ${colorize(stats.downloaded.toString(), ANSI_COLORS.green)} 件`);
+  console.log(`${colorize('スキップ合計', ANSI_COLORS.bold)}: ${colorize(stats.skipped.total.toString(), ANSI_COLORS.cyan)} 件`);
+  console.log(`  ${colorize('└ 既にダウンロード済み', ANSI_COLORS.dim)}: ${colorize(stats.skipped.alreadyDownloaded.toString(), ANSI_COLORS.dim)} 件`);
+  console.log(`  ${colorize('└ スキップリスト', ANSI_COLORS.dim)}: ${colorize(stats.skipped.inSkipList.toString(), ANSI_COLORS.dim)} 件`);
+  console.log(`  ${colorize('└ 存在しないツイート', ANSI_COLORS.dim)}: ${colorize(stats.skipped.notFound.toString(), ANSI_COLORS.dim)} 件`);
+  console.log(`  ${colorize('└ センシティブ', ANSI_COLORS.dim)}: ${colorize(stats.skipped.sensitive.toString(), ANSI_COLORS.dim)} 件`);
+  console.log(`  ${colorize('└ 解析エラー', ANSI_COLORS.dim)}: ${colorize(stats.skipped.parseError.toString(), ANSI_COLORS.dim)} 件`);
+  console.log(`  ${colorize('└ メディアなし', ANSI_COLORS.dim)}: ${colorize(stats.skipped.noMedia.toString(), ANSI_COLORS.dim)} 件`);
+  console.log(`${colorize('エラー', ANSI_COLORS.bold)}: ${colorize(stats.errors.toString(), ANSI_COLORS.red)} 件`);
+  console.log(`${colorize('API呼び出し', ANSI_COLORS.bold)}: ${colorize(stats.apiCalls.toString(), ANSI_COLORS.yellow)} 件`);
+  console.log(`${colorize('キャッシュ使用', ANSI_COLORS.bold)}: ${colorize(stats.cachedResponses.toString(), ANSI_COLORS.green)} 件`);
+  console.log(`${colorize('ダウンロードファイル', ANSI_COLORS.bold)}: ${colorize(stats.mediaFilesDownloaded.toString(), ANSI_COLORS.yellow)} 件`);
+  console.log(`${colorize('保存メタデータ', ANSI_COLORS.bold)}: ${colorize(stats.metadataSaved.toString(), ANSI_COLORS.yellow)} 件`);
+  console.log(colorize('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', ANSI_COLORS.cyan));
+  console.log(`${colorize('スキップリスト', ANSI_COLORS.bold)}: ${colorize(finalListSizes.skipIds.toString(), ANSI_COLORS.yellow)} 件`);
+  console.log(`${colorize('存在しないツイート', ANSI_COLORS.bold)}: ${colorize(finalListSizes.notFoundIds.toString(), ANSI_COLORS.yellow)} 件`);
+  console.log(`${colorize('センシティブコンテンツ', ANSI_COLORS.bold)}: ${colorize(finalListSizes.sensitiveIds.toString(), ANSI_COLORS.yellow)} 件`);
+  console.log(`${colorize('解析エラー', ANSI_COLORS.bold)}: ${colorize(finalListSizes.parseErrorIds.toString(), ANSI_COLORS.yellow)} 件`);
+  console.log(`${colorize('メディアなし', ANSI_COLORS.bold)}: ${colorize(finalListSizes.noMediaIds.toString(), ANSI_COLORS.yellow)} 件`);
 }
 
 // メイン処理を実行

@@ -1,6 +1,9 @@
 // アプリケーション全体の設定を管理するファイル
 const path = require('path');
 
+// バージョン情報
+const APP_VERSION = '1.2.0';
+
 // ベースディレクトリの設定
 const baseDir = path.resolve(__dirname, '../../');
 
@@ -20,6 +23,9 @@ for (const dir of Object.values(dirs)) {
 
 // アプリケーション設定
 const CONFIG = {
+  // アプリケーションバージョン
+  VERSION: APP_VERSION,
+  
   // リトライ回数 (デフォルト: 3回)
   MAX_RETRIES: 3,
   
@@ -31,6 +37,9 @@ const CONFIG = {
   
   // エラーが多発した場合の待機時間(ミリ秒) (デフォルト: 60000ms)
   ERROR_COOLDOWN: 60000,
+  
+  // ダウンロードのタイムアウト(ミリ秒) (デフォルト: 30000ms)
+  DOWNLOAD_TIMEOUT: 30000,
   
   // エラー記録用のファイルパス (デフォルト: logs/error-log-[timestamp].json)
   ERROR_LOG_FILE: path.join(dirs.logsDir, `error-log-${new Date().toISOString().replace(/:/g, '-')}.json`),
@@ -51,10 +60,20 @@ const CONFIG = {
   NO_MEDIA_LIST_PATH: path.join(dirs.logsDir, 'no-media-ids.json'),
   
   // デバッグモード (詳細情報を表示) (デフォルト: false)
-  DEBUG: false,
+  DEBUG: process.env.DEBUG === 'true' || false,
+  
+  // 進捗バーを表示するかどうか (デフォルト: true)
+  SHOW_PROGRESS: process.env.SHOW_PROGRESS !== 'false',
+  
+  // 並列ダウンロード数 (デフォルト: 1)
+  // 注意: 値を増やすとTwitterのAPI制限に引っかかる可能性があります
+  PARALLEL_DOWNLOADS: process.env.PARALLEL_DOWNLOADS ? parseInt(process.env.PARALLEL_DOWNLOADS) : 1,
   
   // ファイルの読み込みエンコーディング (デフォルト: utf8)
-  ENCODING: 'utf8'
+  ENCODING: 'utf8',
+  
+  // ネットワークリクエストのユーザーエージェント
+  USER_AGENT: `TwitterURLDirect/${APP_VERSION} Node.js/${process.version}`
 };
 
 module.exports = {

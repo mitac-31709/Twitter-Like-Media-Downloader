@@ -49,6 +49,11 @@ function logError(arg1, arg2, arg3, arg4) {
       stack: error && error.stack ? error.stack : new Error().stack
     };
     
+    // コンソールにもエラーを表示（デバッグモードの場合）
+    if (CONFIG.DEBUG) {
+      console.error(`エラー [${errorType}]: ${tweetId} - ${errorObj.error}`);
+    }
+    
     // ロギング
     errorLog.push(errorObj);
     
@@ -58,6 +63,16 @@ function logError(arg1, arg2, arg3, arg4) {
     }
   } catch (e) {
     console.error(`エラーログの記録中にエラーが発生しました: ${e.message}`);
+  }
+}
+
+/**
+ * デバッグログを出力する関数（DEBUG モードの場合のみ）
+ * @param {string} message - ログメッセージ
+ */
+function logDebug(message) {
+  if (CONFIG.DEBUG) {
+    console.log(message);
   }
 }
 
@@ -78,7 +93,7 @@ function saveErrorLogs() {
     const logFilePath = `${dirs.logsDir}/error-log-${now}.json`;
     
     fs.writeFileSync(logFilePath, JSON.stringify(errorLog, null, 2));
-    console.log(`エラーログを保存しました: ${logFilePath}`);
+    logDebug(`エラーログを保存しました: ${logFilePath}`);
     
     // ログリストをクリア
     errorLog = [];
@@ -100,6 +115,11 @@ function determineErrorType(error) {
     if (errorMsg.includes('sensitive content')) return 'sensitive_content';
     if (errorMsg.includes('properties of undefined')) return 'parse';
     if (errorMsg.includes('Authorization')) return 'api';
+    if (errorMsg.includes('rate limit')) return 'rate_limit';
+    if (errorMsg.includes('network error') || 
+        errorMsg.includes('ENOTFOUND') || 
+        errorMsg.includes('ETIMEDOUT') || 
+        errorMsg.includes('ECONNRESET')) return 'network';
   }
   
   return 'other';
@@ -132,6 +152,7 @@ process.on('uncaughtException', (err) => {
 
 module.exports = {
   logError,
+  logDebug,
   saveErrorLogs,
   determineErrorType,
   sleep
