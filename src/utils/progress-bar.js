@@ -223,10 +223,6 @@ function clearMultilineProgress(lines = 2) {
 }
 
 module.exports = {
-  ProgressBar,
-  MultiProgressBar,
-  createLogger,
-  createMultiBarLogger,
   formatFileSize,
   formatTime,
   colorize,
