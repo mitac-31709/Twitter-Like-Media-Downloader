@@ -4,7 +4,14 @@ const { loadLikesData, getDownloadedIds } = require('./utils/file-utils');
 const { loadSkipLists, getListSizes, notFoundIds, sensitiveIds } = require('./utils/list-handlers');
 const { processTweetMedia } = require('./services/media-service');
 const { sleep, saveErrorLogs } = require('./utils/error-handlers');
-const { MultiProgressBar, createMultiBarLogger } = require('./utils/progress-bar');
+const { 
+  MultiProgressBar, 
+  createMultiBarLogger, 
+  formatFileSize, 
+  formatTime, 
+  colorize, 
+  ANSI_COLORS 
+} = require('./utils/progress-bar');
 
 /**
  * 各いいねから画像をダウンロード
@@ -17,22 +24,38 @@ async function downloadAllImages() {
     process.exit(1);
   }
   
-  console.log(`合計 ${likesData.length} 件のいいねを処理します...`);
+  console.log(`${colorize('ダウンロードツール', ANSI_COLORS.bold)} - 合計 ${colorize(likesData.length.toString(), ANSI_COLORS.cyan)} 件のいいねを処理します...`);
   
   // デバッグモード時は追加メッセージを表示
   if (CONFIG.DEBUG) {
-    console.log('デバッグモードが有効です。詳細なログが表示されます。');
+    console.log(`${colorize('デバッグモード', ANSI_COLORS.yellow)}が有効です。詳細なログが表示されます。`);
     // 起動時にスクロールが残らないように少し待機
     await sleep(500);
   }
   
-  // マルチプログレスバーのインスタンス化（改善版）
+  // マルチプログレスバーのインスタンス化（カラフル版）
   const multiBar = new MultiProgressBar({
     clearOnComplete: false,
     hideCursor: true,
-    barLength: 40,
-    fps: CONFIG.DEBUG ? 10 : 5, // デバッグモードでは更新頻度を上げる
-    synchronousUpdate: true
+    barLength: 30,
+    fps: CONFIG.DEBUG ? 15 : 10, // デバッグモードでは更新頻度を上げる
+    synchronousUpdate: true,
+    colors: {
+      bar: {
+        complete: ANSI_COLORS.bgCyan,
+        incomplete: ANSI_COLORS.bgBlue
+      },
+      percentage: ANSI_COLORS.cyan,
+      value: ANSI_COLORS.yellow,
+      total: ANSI_COLORS.brightYellow,
+      time: ANSI_COLORS.green,
+      status: {
+        normal: ANSI_COLORS.white,
+        success: ANSI_COLORS.brightGreen,
+        warning: ANSI_COLORS.brightYellow,
+        error: ANSI_COLORS.brightRed
+      }
+    }
   });
   
   // 全体の進捗バーを作成
@@ -42,8 +65,8 @@ async function downloadAllImages() {
   const fileBar = multiBar.addBar('current-file', 100, {
     format: '{bar} {percentage}% | {filename} | {status}'
   }, {
-    filename: '準備中...',
-    status: '待機中'
+    filename: colorize('準備中...', ANSI_COLORS.cyan),
+    status: colorize('待機中', ANSI_COLORS.dim)
   });
   
   // カスタムロガーを作成（デバッグモード設定を渡す）
@@ -54,16 +77,16 @@ async function downloadAllImages() {
   
   // すでにダウンロード済みのツイートIDを取得（メディアとメタデータを別々に）
   const { mediaIds, metadataIds } = getDownloadedIds();
-  console.log(`既存のダウンロード済みメディア: ${mediaIds.size}件`);
-  console.log(`既存の保存済みメタデータ: ${metadataIds.size}件`);
+  console.log(`既存のダウンロード済みメディア: ${colorize(mediaIds.size.toString(), ANSI_COLORS.green)}件`);
+  console.log(`既存の保存済みメタデータ: ${colorize(metadataIds.size.toString(), ANSI_COLORS.green)}件`);
   
   // スキップリストを読み込む
   loadSkipLists();
   const listSizes = getListSizes();
-  console.log(`スキップリストのツイート: ${listSizes.skipIds}件`);
-  console.log(`存在しないツイートリスト: ${listSizes.notFoundIds}件`);
-  console.log(`センシティブコンテンツリスト: ${listSizes.sensitiveIds}件`);
-  console.log(`解析エラーリスト: ${listSizes.parseErrorIds}件`);
+  console.log(`スキップリストのツイート: ${colorize(listSizes.skipIds.toString(), ANSI_COLORS.yellow)}件`);
+  console.log(`存在しないツイートリスト: ${colorize(listSizes.notFoundIds.toString(), ANSI_COLORS.yellow)}件`);
+  console.log(`センシティブコンテンツリスト: ${colorize(listSizes.sensitiveIds.toString(), ANSI_COLORS.yellow)}件`);
+  console.log(`解析エラーリスト: ${colorize(listSizes.parseErrorIds.toString(), ANSI_COLORS.yellow)}件`);
   
   // スクロールを防止するために少し待機して、上のログを確実に表示
   await sleep(500);
@@ -74,6 +97,17 @@ async function downloadAllImages() {
   // エラーカウンター（連続APIエラーを検出するため）
   let consecutiveApiErrorCount = 0;
   
+  // 処理統計情報
+  const stats = {
+    startTime: Date.now(),
+    totalProcessed: 0,
+    skipped: 0,
+    downloaded: 0,
+    errors: 0,
+    mediaFilesDownloaded: 0,
+    metadataSaved: 0
+  };
+  
   // 定期的にプログレスバーを強制的に再描画するためのインターバル
   const redrawInterval = setInterval(() => {
     multiBar.redraw();
@@ -83,7 +117,7 @@ async function downloadAllImages() {
   process.on('SIGINT', () => {
     clearInterval(redrawInterval);
     multiBar.stop();
-    console.log('\n処理が中断されました。');
+    console.log('\n' + colorize('処理が中断されました。', ANSI_COLORS.yellow));
     process.exit(0);
   });
   
@@ -93,40 +127,56 @@ async function downloadAllImages() {
       const tweetId = likeItem.tweetId;
       const tweetUrl = likeItem.expandedUrl || `https://twitter.com/i/web/status/${tweetId}`;
       
+      // 統計情報の更新
+      stats.totalProcessed++;
+      
       // ファイル名の表示を短くして重複表示を防止
       const displayId = tweetId.length > 10 ? tweetId.substring(0, 10) + '...' : tweetId;
       
       // デバッグモードでは詳細情報を表示
       if (CONFIG.DEBUG) {
-        logger.debug(`[詳細] 処理開始: ID=${tweetId}, URL=${tweetUrl}`);
+        logger.debug(`[詳細] 処理開始: ID=${colorize(tweetId, ANSI_COLORS.cyan)}, URL=${colorize(tweetUrl, ANSI_COLORS.blue)}`);
       }
+      
+      // 経過時間とスループットの計算
+      const elapsedMs = Date.now() - stats.startTime;
+      const elapsedMin = elapsedMs / 60000;
+      const throughputPerMin = elapsedMin > 0 ? Math.round((i / elapsedMin) * 10) / 10 : 0;
+      
+      // 残り時間の推定
+      const itemsLeft = likesData.length - i;
+      const estimatedMinLeft = throughputPerMin > 0 ? Math.round((itemsLeft / throughputPerMin) * 10) / 10 : 0;
       
       // 全体の進捗状況を更新
       const percentage = Math.min(99, Math.round((i / likesData.length) * 100));
       multiBar.update('main', i, { 
-        status: `処理中: ${displayId}`,
-        percentage: percentage
+        status: `処理中: ID ${displayId} (${throughputPerMin}/分・残り約${estimatedMinLeft}分)`,
+        percentage,
+        speed: throughputPerMin,
+        eta: estimatedMinLeft * 60 // 秒単位で変換
       });
       
       // ファイル進捗バーを更新
       multiBar.update('current-file', 0, {
-        filename: `ID: ${displayId}`,
+        filename: `ID: ${colorize(displayId, ANSI_COLORS.cyan)}`,
         status: '処理開始'
       });
       
       // 存在しないツイートリストにあるツイートはスキップ
       if (notFoundIds.has(tweetId)) {
         multiBar.updateStatus('current-file', '存在しないツイート - スキップ');
-        if (CONFIG.DEBUG) logger.debug(`[詳細] ツイートID ${tweetId} は存在しないためスキップ`);
-        await sleep(CONFIG.DEBUG ? 500 : 250); // デバッグモードでは表示確認用に長めに待機
+        if (CONFIG.DEBUG) logger.debug(`[詳細] ツイートID ${colorize(tweetId, ANSI_COLORS.cyan)} は存在しないためスキップ`);
+        await sleep(CONFIG.DEBUG ? 500 : 250);
+        stats.skipped++;
         continue;
       }
       
       // センシティブコンテンツリストにあるツイートはスキップ
       if (sensitiveIds.has(tweetId)) {
         multiBar.updateStatus('current-file', 'センシティブコンテンツ - スキップ');
-        if (CONFIG.DEBUG) logger.debug(`[詳細] ツイートID ${tweetId} はセンシティブコンテンツを含むためスキップ`);
+        if (CONFIG.DEBUG) logger.debug(`[詳細] ツイートID ${colorize(tweetId, ANSI_COLORS.cyan)} はセンシティブコンテンツを含むためスキップ`);
         await sleep(CONFIG.DEBUG ? 500 : 250);
+        stats.skipped++;
         continue;
       }
       
@@ -137,8 +187,9 @@ async function downloadAllImages() {
       // 両方ともダウンロード済みの場合はスキップ
       if (hasMedia && hasMetadata) {
         multiBar.updateStatus('current-file', '既にダウンロード済み - スキップ');
-        if (CONFIG.DEBUG) logger.debug(`[詳細] ツイートID ${tweetId} は画像とメタデータが両方既に保存済み`);
+        if (CONFIG.DEBUG) logger.debug(`[詳細] ツイートID ${colorize(tweetId, ANSI_COLORS.cyan)} は画像とメタデータが両方既に保存済み`);
         await sleep(CONFIG.DEBUG ? 500 : 250);
+        stats.skipped++;
         continue;
       }
       
@@ -151,9 +202,23 @@ async function downloadAllImages() {
       const processResult = await processTweetMedia(tweetId, tweetUrl, { 
         hasMedia, 
         hasMetadata,
-        onProgress: (status, progress) => {
+        onProgress: (status, progress, details = {}) => {
           if (progress && typeof progress === 'number') {
-            multiBar.update('current-file', progress, { status });
+            // ファイルサイズや速度が提供されていれば表示
+            const updateData = { status };
+            
+            if (details.currentSize && details.totalSize) {
+              updateData.size = formatFileSize(details.currentSize);
+              updateData.totalSize = formatFileSize(details.totalSize);
+              updateData.sizeBytes = details.currentSize;
+              updateData.totalSizeBytes = details.totalSize;
+            }
+            
+            if (details.filename) {
+              updateData.filename = colorize(details.filename, ANSI_COLORS.cyan);
+            }
+            
+            multiBar.update('current-file', progress, updateData);
           } else {
             multiBar.updateStatus('current-file', status);
           }
@@ -169,8 +234,19 @@ async function downloadAllImages() {
         const errorMessage = `エラー: ${processResult.errorType || '不明なエラー'}`;
         multiBar.updateStatus('current-file', errorMessage);
         if (CONFIG.DEBUG) logger.debug(`[詳細] ${errorMessage}: ${processResult.error}`);
+        stats.errors++;
       } else {
         multiBar.updateStatus('current-file', '完了');
+        stats.downloaded++;
+        
+        // 統計情報の更新
+        if (processResult.downloadedFiles?.length) {
+          stats.mediaFilesDownloaded += processResult.downloadedFiles.length;
+        }
+        
+        if (processResult.savedMetadata) {
+          stats.metadataSaved++;
+        }
         
         // デバッグモードでは処理結果の詳細を表示
         if (CONFIG.DEBUG) {
@@ -198,24 +274,43 @@ async function downloadAllImages() {
         
         // 連続APIエラーが3回以上発生した場合は長めに待機
         if (consecutiveApiErrorCount >= 3) {
-          multiBar.updateStatus('current-file', `待機中... (${CONFIG.ERROR_COOLDOWN / 1000}秒)`);
-          await sleep(CONFIG.ERROR_COOLDOWN);
+          const cooldownSec = CONFIG.ERROR_COOLDOWN / 1000;
+          multiBar.updateStatus('current-file', `API制限エラー - 待機中... (${cooldownSec}秒)`);
+          
+          // カウントダウン表示
+          for (let sec = cooldownSec; sec > 0; sec -= 1) {
+            multiBar.update('current-file', Math.round((cooldownSec - sec) / cooldownSec * 100), {
+              status: `API制限エラー - 待機中... (残り${sec}秒)`
+            });
+            await sleep(1000);
+          }
+          
           // エラーカウンターをリセット
           consecutiveApiErrorCount = 0;
         } else {
           // APIを使用した場合のみ待機（制限を避けるため）
-          multiBar.updateStatus('current-file', `API制限待機中... (${CONFIG.API_CALL_DELAY / 1000}秒)`);
+          const delaySec = CONFIG.API_CALL_DELAY / 1000;
+          multiBar.updateStatus('current-file', `API制限待機中... (${delaySec}秒)`);
           await sleep(CONFIG.API_CALL_DELAY);
         }
       } else {
         // APIを使用しなかった場合は短めに待機
-        await sleep(CONFIG.DEBUG ? 500 : 300); // デバッグモードでは表示確認用に長めに待機
+        await sleep(CONFIG.DEBUG ? 500 : 300); 
       }
       
       // 全体の進捗バーを更新（必ず正確な進捗数を反映）
       const currentProgress = i + 1;
       const currentPercentage = Math.round((currentProgress / likesData.length) * 100);
-      multiBar.update('main', currentProgress, { percentage: currentPercentage });
+      
+      // 統計情報の更新
+      const successRate = stats.totalProcessed > 0 ? 
+        Math.round((stats.downloaded / stats.totalProcessed) * 100) : 0;
+      const statsText = `成功:${stats.downloaded} スキップ:${stats.skipped} エラー:${stats.errors} (成功率:${successRate}%)`;
+      
+      multiBar.update('main', currentProgress, { 
+        percentage: currentPercentage,
+        status: statsText
+      });
       
       // デバッグモード時は毎回再描画、通常時は処理の10%ごとに再描画
       if (CONFIG.DEBUG || i % Math.max(1, Math.floor(likesData.length / 10)) === 0) {
@@ -223,8 +318,17 @@ async function downloadAllImages() {
       }
     }
     
+    // 統計情報の計算
+    const totalTime = Date.now() - stats.startTime;
+    const totalMinutes = (totalTime / 60000).toFixed(2);
+    const throughput = stats.totalProcessed > 0 ? 
+      (stats.totalProcessed / totalMinutes).toFixed(2) : 0;
+    const successRate = stats.totalProcessed > 0 ? 
+      Math.round((stats.downloaded / stats.totalProcessed) * 100) : 0;
+    
     // 完了メッセージを表示
-    multiBar.completeBar('main', '全ての処理が完了しました');
+    const summaryText = `処理完了 (${totalMinutes}分, ${throughput}件/分, 成功率:${successRate}%)`;
+    multiBar.completeBar('main', summaryText);
     multiBar.completeBar('current-file', '処理完了');
     
     // 少し待機してから停止
@@ -239,16 +343,28 @@ async function downloadAllImages() {
     
     // 最終結果を表示
     const finalListSizes = getListSizes();
-    console.log('すべてのダウンロードが完了しました！');
-    console.log(`スキップリストのツイート数: ${finalListSizes.skipIds}件`);
-    console.log(`存在しないツイート数: ${finalListSizes.notFoundIds}件`);
-    console.log(`センシティブコンテンツ数: ${finalListSizes.sensitiveIds}件`);
-    console.log(`解析エラー数: ${finalListSizes.parseErrorIds}件`);
+    const totalTime = (Date.now() - stats.startTime) / 1000;
+    const timeStr = formatTime(Date.now() - stats.startTime);
+    
+    console.log(colorize('すべてのダウンロードが完了しました！', ANSI_COLORS.brightGreen));
+    console.log(colorize('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', ANSI_COLORS.green));
+    console.log(`${colorize('処理時間', ANSI_COLORS.bold)}: ${colorize(timeStr, ANSI_COLORS.green)} (${totalTime.toFixed(1)}秒)`);
+    console.log(`${colorize('処理項目数', ANSI_COLORS.bold)}: ${colorize(stats.totalProcessed.toString(), ANSI_COLORS.yellow)} 件`);
+    console.log(`${colorize('ダウンロード成功', ANSI_COLORS.bold)}: ${colorize(stats.downloaded.toString(), ANSI_COLORS.green)} 件`);
+    console.log(`${colorize('スキップ', ANSI_COLORS.bold)}: ${colorize(stats.skipped.toString(), ANSI_COLORS.cyan)} 件`);
+    console.log(`${colorize('エラー', ANSI_COLORS.bold)}: ${colorize(stats.errors.toString(), ANSI_COLORS.red)} 件`);
+    console.log(`${colorize('ダウンロードファイル', ANSI_COLORS.bold)}: ${colorize(stats.mediaFilesDownloaded.toString(), ANSI_COLORS.yellow)} 件`);
+    console.log(`${colorize('保存メタデータ', ANSI_COLORS.bold)}: ${colorize(stats.metadataSaved.toString(), ANSI_COLORS.yellow)} 件`);
+    console.log(colorize('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', ANSI_COLORS.green));
+    console.log(`${colorize('スキップリスト', ANSI_COLORS.bold)}: ${colorize(finalListSizes.skipIds.toString(), ANSI_COLORS.yellow)} 件`);
+    console.log(`${colorize('存在しないツイート', ANSI_COLORS.bold)}: ${colorize(finalListSizes.notFoundIds.toString(), ANSI_COLORS.yellow)} 件`);
+    console.log(`${colorize('センシティブコンテンツ', ANSI_COLORS.bold)}: ${colorize(finalListSizes.sensitiveIds.toString(), ANSI_COLORS.yellow)} 件`);
+    console.log(`${colorize('解析エラー', ANSI_COLORS.bold)}: ${colorize(finalListSizes.parseErrorIds.toString(), ANSI_COLORS.yellow)} 件`);
   }
 }
 
 // メイン処理を実行
 downloadAllImages().catch(err => {
-  console.error('致命的なエラーが発生しました:', err);
+  console.error(colorize('致命的なエラーが発生しました:', ANSI_COLORS.brightRed), err);
   saveErrorLogs();
 });

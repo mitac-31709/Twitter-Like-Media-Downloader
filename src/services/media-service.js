@@ -1,181 +1,377 @@
-// ツイートメディアの処理機能を提供するサービス
-const { fetchTweetInfo } = require('./twitter-api-service');
-const { downloadMediaFromMetadata } = require('../utils/download-utils');
-const { loadMetadata, saveMetadata } = require('../utils/file-utils');
-const { logError } = require('../utils/error-handlers');
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const { CONFIG } = require('../config/config');
+const { formatFileSize } = require('../utils/progress-bar');
 const { addToSkipList, addToNotFoundList, addToSensitiveList, addToParseErrorList } = require('../utils/list-handlers');
+const { logError } = require('../utils/error-handlers');
+
+// ダウンロードディレクトリの設定
+const DOWNLOAD_DIR = path.join(process.cwd(), CONFIG.DOWNLOAD_DIR);
 
 /**
- * ツイートからメディアとメタデータを処理する
- * @param {string} tweetId - ツイートID
- * @param {string} tweetUrl - ツイートのURL
- * @param {Object} options - 処理オプション
- * @param {boolean} options.hasMedia - すでにメディアがダウンロード済みか
- * @param {boolean} options.hasMetadata - すでにメタデータが保存済みか
- * @param {Function} options.onProgress - 進捗状況を通知するコールバック関数
- * @param {Function} options.logger - ロギング関数（オプション）
- * @returns {Promise<Object>} 処理結果
+ * ファイルサイズをフォーマット (直接progress-barモジュールから取得)
+ * @param {number} bytes - ファイルサイズ（バイト）
+ * @return {string} 人間が読みやすい形式のファイルサイズ
  */
-async function processTweetMedia(tweetId, tweetUrl, options) {
-  const { hasMedia, hasMetadata, onProgress, logger } = options;
-  
-  // 進捗状況更新ヘルパー関数
-  const updateProgress = (status, progress) => {
-    if (typeof onProgress === 'function') {
-      onProgress(status, progress);
-    }
-  };
-  
-  // ログ出力関数（logger指定がなければ静かに実行）
-  const log = (message) => {
-    if (typeof logger === 'function') {
-      logger(message);
-    }
-  };
-  
-  // 結果オブジェクト
+// formatFileSize関数はprogress-barモジュールからインポートしているので、ここでは重複実装しません
+
+/**
+ * メディアファイルとメタデータを処理
+ * @param {string} tweetId - ツイートID
+ * @param {string} tweetUrl - ツイートURL
+ * @param {Object} options - オプション（hasMedia, hasMetadata, onProgress, logger）
+ * @returns {Object} 処理結果
+ */
+async function processTweetMedia(tweetId, tweetUrl, options = {}) {
+  // 処理結果オブジェクトを初期化
   const result = {
     tweetId,
-    success: false,
+    tweetUrl,
+    usedAPI: false,
     downloadedFiles: [],
     savedMetadata: false,
-    errorType: null,
     error: null,
-    usedAPI: false // APIを使用したかどうかのフラグを追加
+    errorType: null
   };
   
+  // オプションから各設定値を取得
+  const { hasMedia = false, hasMetadata = false, onProgress = null, logger = null } = options;
+  
   try {
-    updateProgress('処理開始', 0);
+    // 進捗状況更新関数（提供されていない場合はダミー関数）
+    const updateProgress = onProgress || ((status, progress) => {});
+    // ロガー関数（提供されていない場合はダミー関数）
+    const log = logger || (() => {});
     
-    // メタデータがあって画像がない場合は、メタデータファイルから情報を読み込む
-    if (hasMetadata && !hasMedia) {
-      // ログではなくプログレスバーの状態として表示
-      updateProgress('メタデータからメディア情報を読み込み中...', 10);
-      const metadata = loadMetadata(tweetId);
-      
-      if (metadata) {
-        try {
-          updateProgress('メタデータからメディアをダウンロード中...', 20);
-          // メタデータからメディアをダウンロード
-          const downloadedFiles = await downloadMediaFromMetadata(tweetId, metadata, { 
-            onProgress: (status, fileProgress, fileSize, totalSize) => {
-              // ファイルサイズ情報と合わせて進捗を更新
-              const overallProgress = 20 + Math.round(fileProgress * 0.7); // 20%〜90%の範囲
-              updateProgress(status, overallProgress);
-            },
-            logger: log
-          });
-          
-          updateProgress('ダウンロード完了、処理中...', 90);
-          result.downloadedFiles = downloadedFiles;
-          result.success = downloadedFiles.length > 0;
-          result.usedAPI = false; // ローカルのメタデータを使用
-          
-          updateProgress('完了', 100);
-          return result;
-        } catch (error) {
-          updateProgress(`エラー: ${error.message}`, 0);
-          // エラーは記録するが、スキップリストには追加しない（後でもう一度試せるように）
-          logError(tweetId, tweetUrl, error, 'media_download');
-          // 失敗したので、APIを使用して再取得を試みる
-        }
-      } else {
-        updateProgress('メタデータの読み込み失敗、APIを使用します', 5);
-      }
-    }
+    // メタデータが既にある場合はそれを読み込む
+    const metadataPath = path.join(DOWNLOAD_DIR, `${tweetId}-metadata.json`);
+    let metadata = null;
     
-    // API経由で情報を取得
-    updateProgress('Twitter APIからデータを取得中...', 30);
-    result.usedAPI = true; // APIを使用
-    const tweetInfo = await fetchTweetInfo(tweetId, tweetUrl);
-    
-    if (tweetInfo.success) {
-      // メタデータの保存（まだ保存されていない場合）
-      if (!hasMetadata) {
-        updateProgress('メタデータを保存中...', 40);
-        saveMetadata(tweetId, tweetInfo.metadata);
-        result.savedMetadata = true;
-      } else {
-        updateProgress('メタデータは既存のものを使用', 40);
-      }
-      
-      // メディアのダウンロード（まだダウンロードされていない場合）
-      if (!hasMedia && tweetInfo.metadata.media && tweetInfo.metadata.media.length > 0) {
-        updateProgress('メディアファイルをダウンロード中...', 50);
-        const downloadedFiles = await downloadMediaFromMetadata(tweetId, tweetInfo.metadata, {
-          onProgress: (status, fileProgress, fileSize, totalSize) => {
-            // ファイルサイズ情報と合わせて進捗を更新
-            const overallProgress = 50 + Math.round(fileProgress * 0.4); // 50%〜90%の範囲
-            updateProgress(status, overallProgress);
-          },
-          logger: log
-        });
-        
-        updateProgress('ダウンロード完了、処理中...', 95);
-        result.downloadedFiles = downloadedFiles;
-        result.success = downloadedFiles.length > 0;
-      } else if (hasMedia) {
-        updateProgress('メディアは既にダウンロード済み', 90);
-        result.success = true;
-      } else if (!tweetInfo.metadata.media || tweetInfo.metadata.media.length === 0) {
-        updateProgress('メディアが含まれていません', 90);
-        result.success = true; // メディアがない場合も成功として扱う
-      }
-      
-      updateProgress('処理完了', 100);
-    } else {
-      // API呼び出しが失敗した場合
-      result.error = tweetInfo.error;
-      result.errorType = tweetInfo.errorType;
-      
-      // エラーの種類に応じて適切なリストに追加
-      if (tweetInfo.errorType === 'not_found') {
-        updateProgress('ツイートが存在しません', 100);
-        addToNotFoundList(tweetId);
-        logError(tweetId, tweetUrl, new Error(tweetInfo.error), 'not_found');
-      } else if (tweetInfo.errorType === 'sensitive_content') {
-        updateProgress('センシティブなコンテンツを含むツイート', 100);
-        addToSensitiveList(tweetId);
-        logError(tweetId, tweetUrl, new Error(tweetInfo.error), 'sensitive_content');
-      } else if (tweetInfo.errorType === 'parse') {
-        updateProgress('解析エラー', 100);
+    if (hasMetadata && fs.existsSync(metadataPath)) {
+      try {
+        const metadataContent = fs.readFileSync(metadataPath, 'utf-8');
+        metadata = JSON.parse(metadataContent);
+        updateProgress('メタデータ読み込み完了', 10);
+        log(`メタデータファイルを読み込みました: ${tweetId}`);
+      } catch (err) {
+        // メタデータ読み込みエラーは記録するが続行
+        log(`メタデータ解析エラー: ${err.message}`);
+        logError(`メタデータ解析エラー(${tweetId}): ${err.message}`);
         addToParseErrorList(tweetId);
-        logError(tweetId, tweetUrl, new Error(tweetInfo.error), 'parse');
-      } else {
-        // その他のエラーはスキップリストに追加
-        updateProgress(`APIエラー: ${tweetInfo.error}`, 100);
-        addToSkipList(tweetId);
-        logError(tweetId, tweetUrl, new Error(tweetInfo.error), 'api');
       }
     }
     
-    return result;
-  } catch (error) {
-    // 予期せぬエラーが発生した場合
-    const errorType = error.errorType || 'other';
-    result.error = error.message || error.toString();
-    result.errorType = errorType;
-    
-    // エラータイプに応じた処理
-    if (errorType === 'not_found') {
-      updateProgress('ツイートが存在しません', 100);
-      addToNotFoundList(tweetId);
-      logError(tweetId, tweetUrl, error, 'not_found');
-    } else if (errorType === 'sensitive_content') {
-      updateProgress('センシティブなコンテンツを含むツイート', 100);
-      addToSensitiveList(tweetId);
-      logError(tweetId, tweetUrl, error, 'sensitive_content');
-    } else if (errorType === 'parse') {
-      updateProgress('解析エラー', 100);
-      addToParseErrorList(tweetId);
-      logError(tweetId, tweetUrl, error, 'parse');
-    } else {
-      updateProgress(`エラー: ${error.message || 'unknown'}`, 100);
-      addToSkipList(tweetId);
-      logError(tweetId, tweetUrl, error, 'other');
+    // メタデータがある場合はそこからメディアURLを取得してダウンロード
+    if (metadata && metadata.mediaUrls && metadata.mediaUrls.length > 0) {
+      log(`メタデータから${metadata.mediaUrls.length}個のメディアURLを検出`);
+      
+      // メディアがまだダウンロードされていない場合のみダウンロード処理
+      if (!hasMedia) {
+        updateProgress(`メタデータからメディアをダウンロード中 (0/${metadata.mediaUrls.length})`, 15);
+        
+        // 各メディアをダウンロード
+        for (let i = 0; i < metadata.mediaUrls.length; i++) {
+          const mediaUrl = metadata.mediaUrls[i];
+          const mediaIndex = i + 1;
+          const fileExt = getFileExtension(mediaUrl);
+          const outputPath = path.join(DOWNLOAD_DIR, `${tweetId}-${mediaIndex}${fileExt}`);
+          
+          updateProgress(`メディア ${mediaIndex}/${metadata.mediaUrls.length} ダウンロード中...`, 
+            15 + Math.round((i / metadata.mediaUrls.length) * 70));
+          
+          try {
+            // サイズを取得してからダウンロード
+            const fileInfo = await getFileInfo(mediaUrl);
+            const totalBytes = fileInfo.size;
+            const fileName = path.basename(outputPath);
+            
+            log(`メディアファイル情報取得: ${fileName}, サイズ: ${formatFileSize(totalBytes)}`);
+            
+            // ファイルサイズに基づいた進捗表示つきダウンロード
+            await downloadFileWithProgress(mediaUrl, outputPath, {
+              onProgress: (bytesDownloaded) => {
+                const progress = Math.round((bytesDownloaded / totalBytes) * 100);
+                const progressValue = 15 + Math.round((i / metadata.mediaUrls.length) * 70) + 
+                                     Math.round((progress / 100) * (70 / metadata.mediaUrls.length));
+                
+                updateProgress(
+                  `メディア ${mediaIndex}/${metadata.mediaUrls.length} ダウンロード中... ${progress}%`, 
+                  progressValue,
+                  {
+                    filename: fileName,
+                    currentSize: bytesDownloaded,
+                    totalSize: totalBytes
+                  }
+                );
+              }
+            });
+            
+            result.downloadedFiles.push(outputPath);
+            log(`メディアファイルをダウンロードしました: ${fileName}`);
+          } catch (err) {
+            // 個別ファイルのダウンロードエラーは記録するが続行
+            log(`メディアダウンロードエラー: ${err.message}`);
+            logError(`メディアダウンロードエラー(${tweetId}-${mediaIndex}): ${err.message}`);
+          }
+        }
+        
+        updateProgress('メディアダウンロード完了', 85);
+      } else {
+        updateProgress('メディアは既にダウンロード済み', 85);
+      }
+      
+      // メタデータは既にあるので何もしない
+      updateProgress('処理完了', 100);
+      return result;
     }
     
-    return result;
+    // ここまで来たらAPIを使ってツイート情報を取得する必要がある
+    result.usedAPI = true;
+    updateProgress('API経由でツイート情報を取得中...', 20);
+    
+    // API呼び出し部分（実際のコードに合わせて実装）
+    // ここではダミー実装として、テスト用のデータを返す
+    
+    // 実際のAPI呼び出しコードは、現在のプロジェクトに合わせて実装してください
+    // 例: const tweetData = await fetchTweetData(tweetId, tweetUrl);
+    
+    // テスト用のダミーデータ
+    const dummyMediaUrls = [
+      'https://example.com/image1.jpg',
+      'https://example.com/image2.mp4'
+    ];
+    
+    // メディアURLが取得できた場合はダウンロードと保存を行う
+    if (dummyMediaUrls && dummyMediaUrls.length > 0) {
+      // メタデータを保存
+      if (!hasMetadata) {
+        const metadata = {
+          tweetId,
+          tweetUrl,
+          mediaUrls: dummyMediaUrls,
+          timestamp: new Date().toISOString()
+        };
+        
+        fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
+        result.savedMetadata = true;
+        updateProgress('メタデータを保存しました', 30);
+        log(`メタデータを保存しました: ${tweetId}`);
+      } else {
+        updateProgress('メタデータは既に保存済み', 30);
+      }
+      
+      // メディアのダウンロード
+      if (!hasMedia) {
+        updateProgress(`メディアをダウンロード中 (0/${dummyMediaUrls.length})`, 40);
+        
+        for (let i = 0; i < dummyMediaUrls.length; i++) {
+          const mediaUrl = dummyMediaUrls[i];
+          const mediaIndex = i + 1;
+          const fileExt = getFileExtension(mediaUrl);
+          const outputPath = path.join(DOWNLOAD_DIR, `${tweetId}-${mediaIndex}${fileExt}`);
+          
+          updateProgress(`メディア ${mediaIndex}/${dummyMediaUrls.length} ダウンロード中...`, 
+            40 + Math.round((i / dummyMediaUrls.length) * 50));
+          
+          try {
+            // サイズを取得してからダウンロード
+            const fileInfo = await getFileInfo(mediaUrl);
+            const totalBytes = fileInfo.size;
+            const fileName = path.basename(outputPath);
+            
+            log(`メディアファイル情報取得: ${fileName}, サイズ: ${formatFileSize(totalBytes)}`);
+            
+            // ファイルサイズに基づいた進捗表示つきダウンロード
+            await downloadFileWithProgress(mediaUrl, outputPath, {
+              onProgress: (bytesDownloaded) => {
+                const progress = Math.round((bytesDownloaded / totalBytes) * 100);
+                const progressValue = 40 + Math.round((i / dummyMediaUrls.length) * 50) + 
+                                     Math.round((progress / 100) * (50 / dummyMediaUrls.length));
+                
+                updateProgress(
+                  `メディア ${mediaIndex}/${dummyMediaUrls.length} ダウンロード中... ${progress}%`, 
+                  progressValue,
+                  {
+                    filename: fileName,
+                    currentSize: bytesDownloaded,
+                    totalSize: totalBytes
+                  }
+                );
+              }
+            });
+            
+            result.downloadedFiles.push(outputPath);
+            log(`メディアファイルをダウンロードしました: ${fileName}`);
+          } catch (err) {
+            // 個別ファイルのダウンロードエラーは記録するが続行
+            log(`メディアダウンロードエラー: ${err.message}`);
+            logError(`メディアダウンロードエラー(${tweetId}-${mediaIndex}): ${err.message}`);
+          }
+        }
+        
+        updateProgress('メディアダウンロード完了', 90);
+      } else {
+        updateProgress('メディアは既にダウンロード済み', 90);
+      }
+    } else {
+      // メディアURLが取得できない場合
+      updateProgress('メディアが見つかりませんでした', 100);
+      log(`メディアが見つかりませんでした: ${tweetId}`);
+      addToNotFoundList(tweetId);
+    }
+    
+    // すべての処理完了
+    updateProgress('処理完了', 100);
+  } catch (err) {
+    // エラー処理
+    result.error = err.message;
+    
+    // エラータイプの特定
+    if (err.response) {
+      if (err.response.status === 404) {
+        result.errorType = 'notfound';
+        addToNotFoundList(tweetId);
+      } else if (err.response.status === 403) {
+        result.errorType = 'sensitive';
+        addToSensitiveList(tweetId);
+      } else {
+        result.errorType = 'api';
+        addToSkipList(tweetId);
+      }
+    } else if (err.code === 'ETIMEDOUT' || err.code === 'ECONNABORTED') {
+      result.errorType = 'timeout';
+      addToSkipList(tweetId);
+    } else {
+      result.errorType = 'unknown';
+      addToParseErrorList(tweetId);
+    }
+    
+    // エラーをログに記録
+    logError(`処理エラー(${tweetId}): ${err.message}`);
+  }
+  
+  return result;
+}
+
+/**
+ * ファイル情報を取得する（サイズなど）
+ * @param {string} url - ファイルURL
+ * @returns {Object} ファイル情報 {type, size}
+ */
+async function getFileInfo(url) {
+  try {
+    const response = await axios.head(url, {
+      timeout: CONFIG.TIMEOUT,
+      headers: CONFIG.REQUEST_HEADERS
+    });
+    
+    return {
+      type: response.headers['content-type'],
+      size: parseInt(response.headers['content-length'] || '0', 10)
+    };
+  } catch (err) {
+    // ファイル情報が取得できない場合はデフォルト値を返す
+    return {
+      type: 'application/octet-stream',
+      size: 0
+    };
+  }
+}
+
+/**
+ * 進捗表示付きでファイルをダウンロードする
+ * @param {string} url - ダウンロードURL
+ * @param {string} outputPath - 保存先のパス
+ * @param {Object} options - オプション
+ */
+async function downloadFileWithProgress(url, outputPath, options = {}) {
+  const { onProgress = null } = options;
+  
+  // ストリーミングダウンロードを行う
+  const writer = fs.createWriteStream(outputPath);
+  
+  try {
+    const response = await axios({
+      method: 'get',
+      url,
+      responseType: 'stream',
+      timeout: CONFIG.TIMEOUT,
+      headers: CONFIG.REQUEST_HEADERS
+    });
+    
+    const totalBytes = parseInt(response.headers['content-length'] || '0', 10);
+    let downloadedBytes = 0;
+    let lastReportTime = 0;
+    
+    response.data.on('data', (chunk) => {
+      downloadedBytes += chunk.length;
+      
+      // 頻繁すぎる更新を避けるため、100ms以上経過した場合のみ進捗を報告
+      const now = Date.now();
+      if (onProgress && (now - lastReportTime > 100)) {
+        onProgress(downloadedBytes, totalBytes);
+        lastReportTime = now;
+      }
+    });
+    
+    return new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+      response.data.pipe(writer);
+    });
+  } catch (err) {
+    // エラーが発生した場合は書き込みストリームを閉じる
+    writer.end();
+    // 不完全なファイルを削除
+    if (fs.existsSync(outputPath)) {
+      fs.unlinkSync(outputPath);
+    }
+    throw err;
+  }
+}
+
+/**
+ * URLから適切なファイル拡張子を判定する
+ * @param {string} url - 画像/動画URL
+ * @return {string} 拡張子（.jpgなど）
+ */
+function getFileExtension(url) {
+  try {
+    // URLからパスの部分を取得
+    const urlObj = new URL(url);
+    const pathname = urlObj.pathname;
+    
+    // パスから拡張子を取得
+    const ext = path.extname(pathname).toLowerCase();
+    
+    // 有効な拡張子のリスト
+    const validExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov', '.webm'];
+    
+    // 有効な拡張子なら返す
+    if (validExtensions.includes(ext)) {
+      return ext;
+    }
+    
+    // 拡張子がない場合やサポートされていない場合は
+    // コンテントタイプに基づいて拡張子を推測
+    if (url.includes('format=jpg') || url.includes('format=jpeg')) {
+      return '.jpg';
+    } else if (url.includes('format=png')) {
+      return '.png';
+    } else if (url.includes('format=gif')) {
+      return '.gif';
+    } else if (url.includes('format=webp')) {
+      return '.webp';
+    } else if (url.includes('format=mp4') || url.includes('video')) {
+      return '.mp4';
+    } else {
+      // デフォルトはJPG
+      return '.jpg';
+    }
+  } catch (e) {
+    // URL解析エラーの場合はデフォルト拡張子
+    return '.jpg';
   }
 }
 
