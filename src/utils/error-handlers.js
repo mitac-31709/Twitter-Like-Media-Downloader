@@ -1,10 +1,43 @@
-// エラー処理とロギングのユーティリティ関数
 const fs = require('fs');
-const readline = require('readline');
 const { CONFIG, dirs } = require('../config/config');
 
 // エラーログ保存用の配列
 let errorLog = [];
+
+/**
+ * 中央集権的なエラーハンドリング関数
+ * @param {string} tweetId - ツイートID
+ * @param {string} url - ツイートURL
+ * @param {Error|string} error - エラーオブジェクトまたはエラーメッセージ
+ * @param {string} [errorType] - エラータイプ ('not_found', 'sensitive_content', 'api', 'parse', 'other')
+ */
+function handleError(tweetId, url, error, errorType = 'other') {
+  const timestamp = new Date().toISOString();
+  const errorObj = {
+    timestamp,
+    tweetId,
+    url,
+    error: error && error.message ? error.message : 
+           (typeof error === 'string' ? error : 
+           (error ? JSON.stringify(error) : 'Unknown error')),
+    errorType,
+    isNotFound: errorType === 'not_found', // 後方互換性のため
+    stack: error && error.stack ? error.stack : new Error().stack
+  };
+
+  // コンソールにもエラーを表示（デバッグモードの場合）
+  if (CONFIG.DEBUG) {
+    console.error(`エラー [${errorType}]: ${tweetId} - ${errorObj.error}`);
+  }
+
+  // ロギング
+  errorLog.push(errorObj);
+
+  // 定期的に保存（20件ごと）
+  if (errorLog.length >= 20) {
+    saveErrorLogs();
+  }
+}
 
 /**
  * エラーを記録する関数
@@ -14,7 +47,6 @@ let errorLog = [];
  */
 function logError(arg1, arg2, arg3, arg4) {
   try {
-    const timestamp = new Date().toISOString();
     let tweetId, url, error, errorType = 'other';
     
     // 引数のパターンを判断
@@ -36,31 +68,8 @@ function logError(arg1, arg2, arg3, arg4) {
       error = arg1;
     }
     
-    // エラーオブジェクト作成
-    const errorObj = {
-      timestamp,
-      tweetId,
-      url,
-      error: error && error.message ? error.message : 
-             (typeof error === 'string' ? error : 
-             (error ? JSON.stringify(error) : 'Unknown error')),
-      errorType,
-      isNotFound: errorType === 'not_found', // 後方互換性のため
-      stack: error && error.stack ? error.stack : new Error().stack
-    };
-    
-    // コンソールにもエラーを表示（デバッグモードの場合）
-    if (CONFIG.DEBUG) {
-      console.error(`エラー [${errorType}]: ${tweetId} - ${errorObj.error}`);
-    }
-    
-    // ロギング
-    errorLog.push(errorObj);
-    
-    // 定期的に保存（20件ごと）
-    if (errorLog.length >= 20) {
-      saveErrorLogs();
-    }
+    // 中央集権的なエラーハンドリング関数を呼び出し
+    handleError(tweetId, url, error, errorType);
   } catch (e) {
     console.error(`エラーログの記録中にエラーが発生しました: ${e.message}`);
   }

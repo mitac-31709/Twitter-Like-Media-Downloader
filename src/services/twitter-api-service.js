@@ -1,4 +1,3 @@
-// Twitter APIの呼び出し機能を提供するサービス
 const { TwitterDL } = require('twitter-downloader');
 const { CONFIG } = require('../config/config');
 const { sleep, determineErrorType } = require('../utils/error-handlers');
