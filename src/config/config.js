@@ -21,11 +21,6 @@ for (const dir of Object.values(dirs)) {
   }
 }
 
-// コマンドライン引数の処理
-const argv = process.argv.slice(2);
-const noAuth = argv.includes('--no-auth') || argv.includes('--no-login');
-const forceAuth = argv.includes('--force-auth') || argv.includes('--use-login');
-
 // アプリケーション設定
 const CONFIG = {
   // アプリケーションバージョン
@@ -78,85 +73,8 @@ const CONFIG = {
   ENCODING: 'utf8',
   
   // ネットワークリクエストのユーザーエージェント
-  USER_AGENT: `TwitterURLDirect/${APP_VERSION} Node.js/${process.version}`,
-
-  // 認証を使用するかどうか (デフォルト: true)
-  // --no-authまたは--no-loginオプションで無効化、--force-authまたは--use-loginオプションで強制有効化
-  USE_AUTH: !noAuth, // --no-authフラグがある場合はfalse、それ以外はtrueに設定
-
-  // Twitter API認証情報 (認証情報を環境変数、設定ファイル、または直接入力から取得)
-  // Authorization headerは省略可能 - 省略した場合はパッケージのデフォルト値が使用される
-  TWITTER_AUTH: process.env.TWITTER_AUTH || '',
-
-  // Twitterのクッキー情報 (センシティブコンテンツなどを取得するために必要)
-  // ブラウザで取得したcookieの値を設定する
-  TWITTER_COOKIE: process.env.TWITTER_COOKIE || '',
-
-  // プロキシ設定 (任意) - http, https, socks5をサポート
-  TWITTER_PROXY: process.env.TWITTER_PROXY || null,
-
-  // クレデンシャル設定ファイルのパス
-  CREDENTIALS_FILE_PATH: path.join(baseDir, '.twitter-credentials.json'),
-
-  // クレデンシャル設定ファイルを読み込む
-  loadCredentials() {
-    try {
-      if (fs.existsSync(this.CREDENTIALS_FILE_PATH)) {
-        const credentials = JSON.parse(fs.readFileSync(this.CREDENTIALS_FILE_PATH, 'utf8'));
-        if (credentials.authorization) this.TWITTER_AUTH = credentials.authorization;
-        if (credentials.cookie) this.TWITTER_COOKIE = credentials.cookie;
-        if (credentials.proxy) this.TWITTER_PROXY = credentials.proxy;
-        
-        // 認証情報の読み込み後に、コマンドライン引数を確認して有効/無効を設定
-        this.USE_AUTH = forceAuth || (!noAuth && (!!this.TWITTER_AUTH || !!this.TWITTER_COOKIE));
-        
-        return true;
-      }
-    } catch (err) {
-      console.error('認証情報の読み込み中にエラーが発生しました:', err);
-    }
-    return false;
-  },
-
-  // クレデンシャル設定を保存する
-  saveCredentials(credentials = {}) {
-    try {
-      const data = {
-        authorization: credentials.authorization || this.TWITTER_AUTH,
-        cookie: credentials.cookie || this.TWITTER_COOKIE,
-        proxy: credentials.proxy || this.TWITTER_PROXY
-      };
-      fs.writeFileSync(this.CREDENTIALS_FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
-      return true;
-    } catch (err) {
-      console.error('認証情報の保存中にエラーが発生しました:', err);
-      return false;
-    }
-  },
-  
-  // 認証設定を切り替える
-  toggleAuth(useAuth = true) {
-    this.USE_AUTH = useAuth;
-    console.log(`認証モード: ${useAuth ? '有効' : '無効'}`);
-    return this.USE_AUTH;
-  }
+  USER_AGENT: `TwitterURLDirect/${APP_VERSION} Node.js/${process.version}`
 };
-
-// アプリケーション起動時に認証情報を読み込み
-CONFIG.loadCredentials();
-
-// 起動時にコマンドライン引数で認証を使用するかどうかが指定された場合、それに従う
-if (noAuth) {
-  CONFIG.USE_AUTH = false;
-  console.log('コマンドライン引数 --no-auth が指定されました。認証情報を使用せずに実行します。');
-} else if (forceAuth) {
-  CONFIG.USE_AUTH = true;
-  console.log('コマンドライン引数 --force-auth が指定されました。認証情報を強制的に使用します。');
-} else if (CONFIG.USE_AUTH) {
-  console.log('認証情報を使用して実行します。無効にするには --no-auth オプションを使用してください。');
-} else {
-  console.log('認証情報を使用せずに実行します。有効にするには --force-auth オプションを使用してください。');
-}
 
 module.exports = {
   CONFIG,

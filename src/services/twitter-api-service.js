@@ -12,36 +12,7 @@ const { sleep, determineErrorType } = require('../utils/error-handlers');
  */
 async function callTwitterAPI(tweetUrl, retryCount = 0) {
   try {
-    // Twitter認証オプションを構築
-    const twitterOptions = {};
-    
-    // 認証モードが有効な場合のみ認証情報を使用
-    if (CONFIG.USE_AUTH) {
-      // 認証情報が設定されている場合は、オプションに追加
-      if (CONFIG.TWITTER_AUTH) {
-        twitterOptions.authorization = CONFIG.TWITTER_AUTH;
-      }
-      
-      // クッキー情報が設定されている場合は、オプションに追加（センシティブコンテンツの取得に必要）
-      if (CONFIG.TWITTER_COOKIE) {
-        twitterOptions.cookie = CONFIG.TWITTER_COOKIE;
-      }
-      
-      // プロキシ設定が指定されている場合は、オプションに追加
-      if (CONFIG.TWITTER_PROXY) {
-        twitterOptions.proxy = CONFIG.TWITTER_PROXY;
-      }
-      
-      // デバッグモードの場合、認証情報の使用状況を表示
-      if (CONFIG.DEBUG) {
-        console.log('  🔑 認証情報を使用してTwitter APIを呼び出しています');
-      }
-    } else if (CONFIG.DEBUG) {
-      console.log('  🔒 認証情報を使用せずにTwitter APIを呼び出しています');
-    }
-    
-    // TwitterDLの呼び出し（認証情報とクッキー情報を渡す）
-    const result = await TwitterDL(tweetUrl, Object.keys(twitterOptions).length > 0 ? twitterOptions : undefined);
+    const result = await TwitterDL(tweetUrl);
     
     // レスポンスの詳細をデバッグ表示
     if (CONFIG.DEBUG && result) {
@@ -64,28 +35,13 @@ async function callTwitterAPI(tweetUrl, retryCount = 0) {
     // エラーの種類によって異なる処理
     switch (errorType) {
       case 'not_found':
+      case 'sensitive_content':
       case 'parse':
         // 特定のエラータイプの場合は直ちにエラーをスローする
-        throw error;
-      case 'sensitive_content':
-        // センシティブコンテンツエラーで認証が無効な場合は、認証設定の使用を推奨するメッセージを表示
-        if (!CONFIG.USE_AUTH && (CONFIG.TWITTER_AUTH || CONFIG.TWITTER_COOKIE)) {
-          console.warn('  📢 センシティブコンテンツを取得するには、コマンドラインオプション --force-auth を使用して認証を有効にしてください');
-        }
         throw error;
       case 'api':
         if (error.message && error.message.includes('Authorization')) {
           console.error(`  🔑 認証エラーが発生しました。TwitterDLの認証情報が無効になっている可能性があります。`);
-          
-          // 認証が有効でエラーが発生した場合は、無認証モードを提案
-          if (CONFIG.USE_AUTH) {
-            console.warn('  💡 認証情報が原因でエラーが発生している場合は、--no-auth オプションを使用して認証なしで試してみてください');
-          }
-        } else if (error.message && error.message.toLowerCase().includes('rate limit')) {
-          // レート制限エラーが発生し、認証が無効な場合は認証を提案
-          if (!CONFIG.USE_AUTH && (CONFIG.TWITTER_AUTH || CONFIG.TWITTER_COOKIE)) {
-            console.warn('  💡 レート制限エラーが発生しました。--force-auth オプションを使用して認証情報を有効にするとレート制限を回避できる場合があります');
-          }
         }
         break;
     }
