@@ -73,7 +73,40 @@ const CONFIG = {
   ENCODING: 'utf8',
   
   // ネットワークリクエストのユーザーエージェント
-  USER_AGENT: `TwitterURLDirect/${APP_VERSION} Node.js/${process.version}`
+  USER_AGENT: `TwitterURLDirect/${APP_VERSION} Node.js/${process.version}`,
+  
+  // UX関連の設定 (新規追加)
+  UX: {
+    // カラーテーマ
+    COLOR_THEME: process.env.COLOR_THEME || 'default', // 'default', 'light', 'dark'
+    
+    // 詳細な統計表示
+    SHOW_DETAILED_STATS: process.env.SHOW_DETAILED_STATS !== 'false',
+    
+    // ファイル名の表示スタイル ('full', 'short', 'id-only')
+    FILENAME_DISPLAY: process.env.FILENAME_DISPLAY || 'short',
+    
+    // 進捗表示の更新間隔 (ミリ秒)
+    PROGRESS_UPDATE_INTERVAL: process.env.PROGRESS_UPDATE_INTERVAL ? parseInt(process.env.PROGRESS_UPDATE_INTERVAL) : 500,
+    
+    // インタラクティブモード（キー入力で一時停止や速度調整などが可能）
+    INTERACTIVE: process.env.INTERACTIVE !== 'false',
+    
+    // プログレスバーのスタイル ('bar', 'dots', 'braille')
+    PROGRESS_STYLE: process.env.PROGRESS_STYLE || 'bar',
+    
+    // 通知サウンドを有効化（完了時や大きなエラー時）
+    SOUND_NOTIFICATIONS: process.env.SOUND_NOTIFICATIONS === 'true',
+    
+    // 自動で定期的にセーブポイントを作成（処理中断時に再開可能）
+    AUTO_SAVE_POINT: process.env.AUTO_SAVE_POINT !== 'false',
+    
+    // セーブポイント作成間隔（処理件数）
+    SAVE_POINT_INTERVAL: process.env.SAVE_POINT_INTERVAL ? parseInt(process.env.SAVE_POINT_INTERVAL) : 20
+  },
+  
+  // 状態保存/復元関連のパス（新規追加）
+  STATE_FILE_PATH: path.join(dirs.logsDir, 'download-state.json')
 };
 
 module.exports = {

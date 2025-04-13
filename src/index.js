@@ -12,8 +12,14 @@ const {
   displayProgress,
   clearMultilineProgress,
   createSpinner,
-  stopSpinner
+  stopSpinner,
+  playNotification,
+  enableInteractiveMode,
+  disableInteractiveMode,
+  getInteractiveState
 } = require('./utils/progress-bar');
+const fs = require('fs').promises;
+const path = require('path');
 
 /**
  * ツイート処理の統計情報
@@ -35,7 +41,9 @@ const stats = {
   mediaFilesDownloaded: 0,
   metadataSaved: 0,
   apiCalls: 0,
-  cachedResponses: 0
+  cachedResponses: 0,
+  lastSavePoint: 0,
+  savePoints: []
 };
 
 // 前回の進捗表示の行数
@@ -49,10 +57,7 @@ let lastProgressLines = 0;
  */
 function updateProgressDisplay(status, progress, details = null) {
   try {
-    // 前回の進捗表示をクリア（2行分）
-    clearMultilineProgress(2);
-    
-    // 新しい進捗を表示
+    // プログレスバーを表示
     displayProgress(status, progress, details);
     
     // 100%完了の場合は改行して次の表示に備える
@@ -65,6 +70,53 @@ function updateProgressDisplay(status, progress, details = null) {
   } catch (err) {
     // プログレスバー表示で問題が発生しても処理を継続
     console.error('プログレス表示エラー:', err);
+  }
+}
+
+/**
+ * 状態を保存する
+ * @param {number} currentIndex - 現在の処理インデックス
+ * @param {Array} likesData - いいねデータ配列
+ */
+async function saveState(currentIndex, likesData) {
+  try {
+    // 処理済みインデックスを保存
+    const saveData = {
+      timestamp: new Date().toISOString(),
+      completedIndex: currentIndex,
+      totalItems: likesData.length,
+      stats: { ...stats },
+      remainingItems: likesData.length - currentIndex
+    };
+    
+    stats.savePoints.push(currentIndex);
+    stats.lastSavePoint = currentIndex;
+    
+    await fs.writeFile(
+      CONFIG.STATE_FILE_PATH,
+      JSON.stringify(saveData, null, 2),
+      'utf8'
+    );
+    
+    logDebug(`${colorize('セーブポイント作成', ANSI_COLORS.green)}: インデックス ${currentIndex} (${Math.round((currentIndex / likesData.length) * 100)}%)`);
+    return true;
+  } catch (err) {
+    console.error(`${colorize('セーブポイント作成エラー', ANSI_COLORS.red)}:`, err);
+    return false;
+  }
+}
+
+/**
+ * 保存された状態を読み込む
+ * @returns {Object|null} 保存された状態オブジェクト、またはnull
+ */
+async function loadState() {
+  try {
+    const data = await fs.readFile(CONFIG.STATE_FILE_PATH, 'utf8');
+    return JSON.parse(data);
+  } catch (err) {
+    // ファイルがない場合は静かに失敗
+    return null;
   }
 }
 
@@ -86,8 +138,36 @@ async function downloadAllImages() {
     process.exit(1);
   }
   
+  // 保存された状態を確認
+  let startIndex = 0;
+  let shouldResume = false;
+  
+  const savedState = await loadState();
+  if (savedState) {
+    const resumeSpinner = createSpinner('前回の続きを確認中...');
+    
+    if (savedState.totalItems === likesData.length && savedState.completedIndex < likesData.length) {
+      shouldResume = true;
+      startIndex = savedState.completedIndex;
+      
+      // 統計情報の復元
+      if (savedState.stats) {
+        Object.assign(stats, savedState.stats);
+        stats.startTime = Date.now() - (Date.now() - new Date(savedState.timestamp).getTime());
+      }
+      
+      stopSpinner(resumeSpinner, `前回の続きから再開します (${Math.round((startIndex / likesData.length) * 100)}% 完了)`);
+    } else {
+      stopSpinner(resumeSpinner, '保存データを検出しましたが、一致しないため最初から開始します');
+    }
+  }
+  
   console.log(`${colorize('━━━━━━━━━━━━━━━━━━━ ダウンロード開始 ━━━━━━━━━━━━━━━━━━━', ANSI_COLORS.cyan)}`);
   console.log(`${colorize('ダウンロードツール', ANSI_COLORS.bold)} - 合計 ${colorize(likesData.length.toString(), ANSI_COLORS.cyan)} 件のいいねを処理します`);
+  
+  if (shouldResume) {
+    console.log(`${colorize('再開モード', ANSI_COLORS.green)}: インデックス ${startIndex} から再開 (残り ${likesData.length - startIndex} 件)`);
+  }
   
   // デバッグモード時は追加メッセージを表示
   if (CONFIG.DEBUG) {
@@ -119,17 +199,69 @@ async function downloadAllImages() {
   // エラーカウンター（連続APIエラーを検出するため）
   let consecutiveApiErrorCount = 0;
   
+  // インタラクティブモードの設定
+  if (CONFIG.UX?.INTERACTIVE) {
+    enableInteractiveMode({
+      onPauseToggle: (isPaused) => {
+        if (isPaused) {
+          console.log(`${colorize('一時停止', ANSI_COLORS.yellow)}: スペースキーで再開`);
+        } else {
+          console.log(`${colorize('再開', ANSI_COLORS.green)}: 処理を続行します`);
+        }
+      },
+      onSpeedChange: (speedFactor) => {
+        console.log(`${colorize('速度変更', ANSI_COLORS.cyan)}: ${speedFactor.toFixed(1)}x`);
+      },
+      onQuit: async () => {
+        console.log(`${colorize('\n終了リクエスト', ANSI_COLORS.yellow)}: 処理を安全に終了します...`);
+        await saveState(startIndex, likesData);
+        displayFinalStats();
+        process.exit(0);
+      }
+    });
+    
+    console.log(`${colorize('インタラクティブモード', ANSI_COLORS.green)}: [スペース]一時停止/再開 [+/-]速度調整 [q]終了`);
+  }
+  
   // 処理終了時のクリーンアップ処理
-  process.on('SIGINT', () => {
+  process.on('SIGINT', async () => {
     lastProgressLines = 0; // 進捗表示をリセット
     console.log('\n' + colorize('処理が中断されました。', ANSI_COLORS.yellow));
+    
+    if (CONFIG.UX?.AUTO_SAVE_POINT) {
+      await saveState(startIndex, likesData);
+      console.log('処理状態を保存しました。次回起動時に続きから再開できます。');
+    }
+    
     displayFinalStats();
+    disableInteractiveMode();
     process.exit(0);
   });
   
   try {
     // ツイートの一括処理
-    for (let i = 0; i < likesData.length; i++) {
+    for (let i = startIndex; i < likesData.length; i++) {
+      // インタラクティブモードの一時停止チェック
+      if (CONFIG.UX?.INTERACTIVE) {
+        const state = getInteractiveState();
+        if (state.active && state.paused) {
+          // 一時停止中は待機
+          updateProgressDisplay('一時停止中', Math.min(99, Math.round((i / likesData.length) * 100)), {
+            counter: `[${i + 1}/${likesData.length}]`,
+            type: '停止',
+            stats: {
+              downloaded: stats.downloaded,
+              errors: stats.errors,
+              skipped: stats.skipped.total,
+              apiCalls: stats.apiCalls
+            }
+          });
+          await sleep(500);
+          i--; // インデックスを戻して同じアイテムを再処理
+          continue;
+        }
+      }
+      
       const likeItem = likesData[i].like;
       const tweetId = likeItem.tweetId;
       const tweetUrl = likeItem.expandedUrl || `https://twitter.com/i/web/status/${tweetId}`;
@@ -155,7 +287,7 @@ async function downloadAllImages() {
       const itemsLeft = likesData.length - i;
       const estimatedMinLeft = throughputPerMin > 0 ? Math.round((itemsLeft / throughputPerMin) * 10) / 10 : 0;
       
-      // 全体の進捗状況を表示（前の進捗をクリアしてから）
+      // 全体の進捗状況を表示
       updateProgressDisplay(
         `処理中: ${displayId}`, 
         percentage,
@@ -281,6 +413,10 @@ async function downloadAllImages() {
         const errorType = processResult.errorType || '不明なエラー';
         console.log(`${colorize('❌ エラー', ANSI_COLORS.red)}: ${tweetId} - ${errorType}: ${processResult.error}`);
         stats.errors++;
+        
+        if (processResult.errorType === 'critical') {
+          playNotification('error');
+        }
       } else if (processResult.noMedia) {
         // メディアが存在しないツイートの場合
         console.log(`${colorize('ℹ️ メディアなし', ANSI_COLORS.yellow)}: ${tweetId} - メタデータのみ保存`);
@@ -331,6 +467,7 @@ async function downloadAllImages() {
         if (consecutiveApiErrorCount >= 3) {
           const cooldownSec = CONFIG.ERROR_COOLDOWN / 1000;
           console.log(`${colorize('API制限エラー', ANSI_COLORS.red)}: ${cooldownSec}秒待機します...`);
+          playNotification('warning');
           
           // カウントダウン表示
           for (let sec = cooldownSec; sec > 0; sec -= 1) {
@@ -345,13 +482,30 @@ async function downloadAllImages() {
           // APIを使用した場合のみ待機（制限を避けるため）
           const delaySec = CONFIG.API_CALL_DELAY / 1000;
           logDebug(`API制限待機中... (${delaySec}秒)`);
-          await sleep(CONFIG.API_CALL_DELAY);
+          
+          // インタラクティブモードが有効で、速度調整がある場合は待機時間を調整
+          let actualDelay = CONFIG.API_CALL_DELAY;
+          if (CONFIG.UX?.INTERACTIVE) {
+            const state = getInteractiveState();
+            if (state.active && state.speedFactor !== 1.0) {
+              actualDelay = Math.max(500, actualDelay / state.speedFactor);
+            }
+          }
+          
+          await sleep(actualDelay);
         }
       } else {
         // APIを使用しなかった場合は待機なし（高速化）
         if (!processResult.error && !processResult.noMedia) {
           logDebug(`${colorize('保存済みデータ使用', ANSI_COLORS.green)}: API呼び出し省略`);
         }
+      }
+      
+      // 定期的にセーブポイントを作成（設定に基づく）
+      if (CONFIG.UX?.AUTO_SAVE_POINT && 
+          i > 0 && 
+          (i % CONFIG.UX.SAVE_POINT_INTERVAL === 0 || i === likesData.length - 1)) {
+        await saveState(i, likesData);
       }
       
       // 統計情報の更新（10件ごとに表示）
@@ -368,9 +522,13 @@ async function downloadAllImages() {
     // 進捗表示のリセットと完了メッセージの表示
     lastProgressLines = 0;
     console.log(colorize('\n処理が完了しました', ANSI_COLORS.brightGreen));
+    playNotification('success');
   } finally {
     // 実行完了後に最終ログを保存
     saveErrorLogs();
+    
+    // インタラクティブモードを無効化
+    disableInteractiveMode();
     
     // 最終結果を表示
     displayFinalStats();
@@ -401,6 +559,12 @@ function displayFinalStats() {
   console.log(`${colorize('キャッシュ使用', ANSI_COLORS.bold)}: ${colorize(stats.cachedResponses.toString(), ANSI_COLORS.green)} 件`);
   console.log(`${colorize('ダウンロードファイル', ANSI_COLORS.bold)}: ${colorize(stats.mediaFilesDownloaded.toString(), ANSI_COLORS.yellow)} 件`);
   console.log(`${colorize('保存メタデータ', ANSI_COLORS.bold)}: ${colorize(stats.metadataSaved.toString(), ANSI_COLORS.yellow)} 件`);
+  
+  // セーブポイント情報
+  if (stats.savePoints.length > 0) {
+    console.log(`${colorize('セーブポイント作成', ANSI_COLORS.bold)}: ${colorize(stats.savePoints.length.toString(), ANSI_COLORS.cyan)} 回`);
+  }
+  
   console.log(colorize('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', ANSI_COLORS.cyan));
   console.log(`${colorize('スキップリスト', ANSI_COLORS.bold)}: ${colorize(finalListSizes.skipIds.toString(), ANSI_COLORS.yellow)} 件`);
   console.log(`${colorize('存在しないツイート', ANSI_COLORS.bold)}: ${colorize(finalListSizes.notFoundIds.toString(), ANSI_COLORS.yellow)} 件`);
@@ -413,4 +577,7 @@ function displayFinalStats() {
 downloadAllImages().catch(err => {
   console.error(colorize('致命的なエラーが発生しました:', ANSI_COLORS.brightRed), err);
   saveErrorLogs();
+  
+  // 通知サウンドを再生
+  playNotification('error');
 });

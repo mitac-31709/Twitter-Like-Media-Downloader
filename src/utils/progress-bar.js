@@ -42,8 +42,109 @@ const ANSI_COLORS = {
   gray: '\x1b[2m'
 };
 
+// カラーテーマの定義
+const COLOR_THEMES = {
+  default: {
+    progressBar: {
+      complete: 'green',
+      incomplete: 'gray',
+      border: 'white'
+    },
+    status: 'cyan',
+    filename: 'blue',
+    size: 'yellow',
+    counter: 'yellow',
+    type: 'green',
+    item: 'white',
+    stats: {
+      completed: 'green',
+      errors: 'red',
+      skipped: 'yellow',
+      api: 'cyan'
+    }
+  },
+  light: {
+    progressBar: {
+      complete: 'green',
+      incomplete: 'dim',
+      border: 'dim'
+    },
+    status: 'blue',
+    filename: 'blue',
+    size: 'black',
+    counter: 'black',
+    type: 'blue',
+    item: 'black',
+    stats: {
+      completed: 'green',
+      errors: 'red',
+      skipped: 'magenta',
+      api: 'blue'
+    }
+  },
+  dark: {
+    progressBar: {
+      complete: 'brightGreen',
+      incomplete: 'gray',
+      border: 'brightWhite'
+    },
+    status: 'brightCyan',
+    filename: 'brightBlue',
+    size: 'brightYellow',
+    counter: 'brightYellow',
+    type: 'brightGreen',
+    item: 'brightWhite',
+    stats: {
+      completed: 'brightGreen',
+      errors: 'brightRed',
+      skipped: 'brightYellow',
+      api: 'brightCyan'
+    }
+  }
+};
+
+// プログレスバースタイルの定義
+const PROGRESS_STYLES = {
+  bar: {
+    complete: '█',
+    incomplete: '░'
+  },
+  dots: {
+    complete: '•',
+    incomplete: '·'
+  },
+  braille: {
+    complete: '⣿',
+    incomplete: '⠄'
+  },
+  blocks: {
+    complete: '■',
+    incomplete: '□'
+  },
+  hash: {
+    complete: '#',
+    incomplete: '-'
+  },
+  arrow: {
+    complete: '▶',
+    incomplete: '∙'
+  }
+};
+
+// 現在のテーマ
+let currentTheme = COLOR_THEMES[CONFIG.UX?.COLOR_THEME || 'default'];
+
 // 前回の進捗表示の行数
 let previousProgressLines = 0;
+
+// インタラクティブモードの状態管理
+const interactiveState = {
+  active: false,
+  paused: false,
+  speedFactor: 1.0,
+  lastKeyPress: null,
+  keyListener: null
+};
 
 /**
  * テキストにカラーを適用するユーティリティ関数
@@ -54,6 +155,18 @@ let previousProgressLines = 0;
 function colorize(text, color) {
   const colorCode = ANSI_COLORS[color] || color || ANSI_COLORS.reset;
   return `${colorCode}${text}${ANSI_COLORS.reset}`;
+}
+
+/**
+ * カラーテーマを変更する
+ * @param {string} themeName - テーマ名 ('default', 'light', 'dark')
+ */
+function setColorTheme(themeName) {
+  if (COLOR_THEMES[themeName]) {
+    currentTheme = COLOR_THEMES[themeName];
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -102,16 +215,23 @@ function generateProgressBar(progress, width, options = {}) {
   const completed = Math.floor(progress / 100 * width);
   const remaining = width - completed;
   
-  const completeChar = '█';
-  const incompleteChar = '░';
+  // プログレスバースタイルを取得
+  const style = PROGRESS_STYLES[CONFIG.UX?.PROGRESS_STYLE] || PROGRESS_STYLES.bar;
+  const completeChar = options.completeChar || style.complete;
+  const incompleteChar = options.incompleteChar || style.incomplete;
   
-  const completeColor = options.completeColor || 'green';
-  const incompleteColor = options.incompleteColor || 'dim';
+  const completeColor = options.completeColor || currentTheme.progressBar.complete;
+  const incompleteColor = options.incompleteColor || currentTheme.progressBar.incomplete;
+  const borderColor = options.borderColor || currentTheme.progressBar.border;
   
   const filledBar = colorize(completeChar.repeat(completed), ANSI_COLORS[completeColor]);
   const emptyBar = colorize(incompleteChar.repeat(remaining), ANSI_COLORS[incompleteColor]);
   
-  return `[${filledBar}${emptyBar}] ${colorize(`${progress}%`.padStart(4), progress >= 100 ? ANSI_COLORS.green : ANSI_COLORS.yellow)}`;
+  const progressBrackets = colorize('[]', ANSI_COLORS[borderColor]);
+  const progressBorder = `${progressBrackets[0]}${filledBar}${emptyBar}${progressBrackets[1]}`;
+  
+  const percentColor = progress >= 100 ? 'green' : 'yellow';
+  return `${progressBorder} ${colorize(`${progress}%`.padStart(4), ANSI_COLORS[percentColor])}`;
 }
 
 /**
@@ -124,13 +244,25 @@ function generateDownloadProgress(details) {
   
   const sizeInfo = `${formatFileSize(details.currentSize)}${details.totalSize ? ' / ' + formatFileSize(details.totalSize) : ''}`;
   
-  // ファイル名は短縮表示
+  // ファイル名表示スタイルに基づいて表示
   const filename = details.filename;
-  const truncatedFilename = filename.length > 30 
-    ? filename.substring(0, 15) + '...' + filename.substring(filename.length - 15) 
-    : filename;
+  let displayFilename = filename;
   
-  return `${colorize(truncatedFilename, ANSI_COLORS.blue)} ${colorize(sizeInfo, ANSI_COLORS.yellow)}`;
+  switch(CONFIG.UX?.FILENAME_DISPLAY || 'short') {
+    case 'short':
+      displayFilename = filename.length > 30 
+        ? filename.substring(0, 15) + '...' + filename.substring(filename.length - 15) 
+        : filename;
+      break;
+    case 'id-only':
+      // IDだけを表示（例: 123456789.jpg → 123456789）
+      const match = filename.match(/(\d+)/);
+      displayFilename = match ? match[1] : filename;
+      break;
+    // fullの場合はそのまま表示
+  }
+  
+  return `${colorize(displayFilename, ANSI_COLORS[currentTheme.filename])} ${colorize(sizeInfo, ANSI_COLORS[currentTheme.size])}`;
 }
 
 /**
@@ -143,29 +275,40 @@ function generateDownloadProgress(details) {
 function generateComplexProgress(status, progress, details = null) {
   // メインプログレスバー
   const mainBar = generateProgressBar(progress, 40, {
-    completeColor: 'green',
-    incompleteColor: 'gray'
+    completeColor: currentTheme.progressBar.complete,
+    incompleteColor: currentTheme.progressBar.incomplete,
+    borderColor: currentTheme.progressBar.border
   });
 
   // 状態メッセージ（APT風のフォーマット）
-  const statusMsg = colorize(status, ANSI_COLORS.cyan);
+  const statusMsg = colorize(status, ANSI_COLORS[currentTheme.status]);
+  
+  // インタラクティブモードの状態表示
+  let interactiveInfo = '';
+  if (CONFIG.UX?.INTERACTIVE && interactiveState.active) {
+    if (interactiveState.paused) {
+      interactiveInfo = ` ${colorize('[一時停止中]', ANSI_COLORS.yellow)}`;
+    } else if (interactiveState.speedFactor !== 1.0) {
+      interactiveInfo = ` ${colorize(`[速度: x${interactiveState.speedFactor.toFixed(1)}]`, ANSI_COLORS.cyan)}`;
+    }
+  }
   
   // 処理詳細を表示（2行目）
   let statusLine = '';
   if (details) {
     // カウンター表示
     if (details.counter) {
-      statusLine += `${colorize(details.counter, ANSI_COLORS.yellow)} `;
+      statusLine += `${colorize(details.counter, ANSI_COLORS[currentTheme.counter])} `;
     }
 
     // 処理タイプ表示
     if (details.type) {
-      statusLine += `${colorize(details.type, ANSI_COLORS.green)} `;
+      statusLine += `${colorize(details.type, ANSI_COLORS[currentTheme.type])} `;
     }
 
     // 処理アイテム
     if (details.item) {
-      statusLine += `${details.item} `;
+      statusLine += `${colorize(details.item, ANSI_COLORS[currentTheme.item])} `;
     }
   }
 
@@ -173,7 +316,8 @@ function generateComplexProgress(status, progress, details = null) {
   const progressText = [
     mainBar,
     ` ${progress}%`,
-    statusMsg
+    statusMsg,
+    interactiveInfo
   ].join('');
 
   let output = progressText;
@@ -192,15 +336,20 @@ function generateComplexProgress(status, progress, details = null) {
   }
 
   // 統計情報（最下行）
-  if (details?.stats) {
+  if (details?.stats && CONFIG.UX?.SHOW_DETAILED_STATS) {
     const { downloaded, errors, skipped, apiCalls } = details.stats;
     const statsLine = [
-      `${colorize('完了', ANSI_COLORS.green)}: ${downloaded}`,
-      `${colorize('エラー', ANSI_COLORS.red)}: ${errors}`,
-      `${colorize('スキップ', ANSI_COLORS.yellow)}: ${skipped}`,
-      `${colorize('API', ANSI_COLORS.cyan)}: ${apiCalls}`
+      `${colorize('完了', ANSI_COLORS[currentTheme.stats.completed])}: ${downloaded}`,
+      `${colorize('エラー', ANSI_COLORS[currentTheme.stats.errors])}: ${errors}`,
+      `${colorize('スキップ', ANSI_COLORS[currentTheme.stats.skipped])}: ${skipped}`,
+      `${colorize('API', ANSI_COLORS[currentTheme.stats.api])}: ${apiCalls}`
     ].join(' | ');
     output += `\n${colorize('━'.repeat(process.stdout.columns || 80), ANSI_COLORS.dim)}\n${statsLine}`;
+  }
+
+  // インタラクティブモードのヘルプ（最初の数回だけ表示）
+  if (CONFIG.UX?.INTERACTIVE && interactiveState.active && interactiveState.lastKeyPress === null) {
+    output += `\n${colorize('ヘルプ: [スペース] 一時停止/再開 [+/-] 速度調整 [q] 終了', ANSI_COLORS.dim)}`;
   }
 
   return output;
@@ -293,6 +442,136 @@ function stopSpinner(spinner, finalText) {
   process.stdout.write(`\r${colorize('✓', ANSI_COLORS.green)} ${displayText}\n`);
 }
 
+/**
+ * 通知音を再生する
+ * @param {string} type - 通知タイプ ('success', 'error', 'warning')
+ */
+function playNotification(type) {
+  if (!CONFIG.UX?.SOUND_NOTIFICATIONS) return;
+  
+  // プラットフォームに依存しない簡易的な通知音
+  let beepCode;
+  switch (type) {
+    case 'success':
+      // 成功音（連続ビープ：高音 → さらに高音）
+      beepCode = '\x07\x07';
+      break;
+    case 'error':
+      // エラー音（連続ビープ：低音 → 高音 → 低音）
+      beepCode = '\x07\x07\x07';
+      break;
+    case 'warning':
+      // 警告音（単一ビープ）
+      beepCode = '\x07';
+      break;
+    default:
+      beepCode = '\x07';
+  }
+  
+  process.stdout.write(beepCode);
+}
+
+/**
+ * インタラクティブモードを有効化する
+ * （キーボードショートカットでの操作を可能にする）
+ * @param {Object} options - オプション
+ */
+function enableInteractiveMode(options = {}) {
+  if (!CONFIG.UX?.INTERACTIVE || interactiveState.active) return false;
+  
+  // インタラクティブモードの状態を初期化
+  interactiveState.active = true;
+  interactiveState.paused = false;
+  interactiveState.speedFactor = 1.0;
+  interactiveState.lastKeyPress = null;
+  
+  // stdin設定
+  if (!process.stdin.isTTY) return false;
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding('utf8');
+  
+  // キー入力ハンドラーを設定
+  interactiveState.keyListener = (key) => {
+    interactiveState.lastKeyPress = Date.now();
+    
+    // Ctrl+C で終了
+    if (key === '\u0003') {
+      process.exit();
+    }
+    
+    // スペースで一時停止/再開
+    if (key === ' ') {
+      interactiveState.paused = !interactiveState.paused;
+      if (options.onPauseToggle) {
+        options.onPauseToggle(interactiveState.paused);
+      }
+    }
+    
+    // +/-で速度調整
+    if (key === '+' || key === '=') {
+      interactiveState.speedFactor = Math.min(5.0, interactiveState.speedFactor + 0.5);
+      if (options.onSpeedChange) {
+        options.onSpeedChange(interactiveState.speedFactor);
+      }
+    }
+    if (key === '-' || key === '_') {
+      interactiveState.speedFactor = Math.max(0.5, interactiveState.speedFactor - 0.5);
+      if (options.onSpeedChange) {
+        options.onSpeedChange(interactiveState.speedFactor);
+      }
+    }
+    
+    // qで終了
+    if (key === 'q' || key === 'Q') {
+      if (options.onQuit) {
+        options.onQuit();
+      }
+    }
+    
+    // その他のキー入力
+    if (options.onKeyPress) {
+      options.onKeyPress(key);
+    }
+  };
+  
+  // キー入力イベントリスナーを追加
+  process.stdin.on('data', interactiveState.keyListener);
+  
+  return true;
+}
+
+/**
+ * インタラクティブモードを無効化する
+ */
+function disableInteractiveMode() {
+  if (!interactiveState.active) return;
+  
+  // イベントリスナーを削除
+  if (interactiveState.keyListener) {
+    process.stdin.removeListener('data', interactiveState.keyListener);
+  }
+  
+  // stdin設定を元に戻す
+  process.stdin.setRawMode(false);
+  process.stdin.pause();
+  
+  // 状態をリセット
+  interactiveState.active = false;
+  interactiveState.paused = false;
+  interactiveState.speedFactor = 1.0;
+  interactiveState.lastKeyPress = null;
+  interactiveState.keyListener = null;
+}
+
+/**
+ * 現在のインタラクティブモードの状態を取得する
+ * @returns {Object} 状態オブジェクト
+ */
+function getInteractiveState() {
+  return { ...interactiveState };
+}
+
 module.exports = {
   formatFileSize,
   formatTime,
@@ -301,5 +580,10 @@ module.exports = {
   displayProgress,
   clearMultilineProgress,
   createSpinner,
-  stopSpinner
+  stopSpinner,
+  playNotification,
+  enableInteractiveMode,
+  disableInteractiveMode,
+  getInteractiveState,
+  setColorTheme
 };
