@@ -202,11 +202,13 @@ function getListSizes() {
  * @returns {boolean} いずれかのリストに含まれていればtrue
  */
 function isTweetInAnySkipList(tweetId) {
-  return skipIds.has(tweetId) || 
-         notFoundIds.has(tweetId) || 
-         sensitiveIds.has(tweetId) || 
-         parseErrorIds.has(tweetId) ||
-         noMediaIds.has(tweetId);
+  // 高速なチェックのために、最も頻繁に使用されるリストから順番にチェック
+  if (noMediaIds.has(tweetId)) return true;
+  if (skipIds.has(tweetId)) return true;
+  if (notFoundIds.has(tweetId)) return true;
+  if (sensitiveIds.has(tweetId)) return true;
+  if (parseErrorIds.has(tweetId)) return true;
+  return false;
 }
 
 /**
