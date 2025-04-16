@@ -82,7 +82,41 @@ async function download(url, out, onProgress) {
   });
 }
 
+function printUsage() {
+  console.log(`\nTwitter Like Media Downloader Ver.2.0 (シンプル版)\n`);
+  console.log(`使い方: node re_index.js [--help]`);
+  console.log(`\nlike.js（Twitterエクスポートのいいねデータ）を元に、画像・動画・メタデータをdownloaded_images/に保存します。`);
+  console.log(`\nオプション:`);
+  console.log(`  --help     この使い方を表示\n`);
+  console.log(`\nファイル構成:`);
+  console.log(`  like.js                入力データ（必須）`);
+  console.log(`  downloaded_images/     保存先ディレクトリ`);
+  console.log(`  logs/skip-ids.json     スキップIDリスト`);
+  console.log(`  logs/error-log.json    エラーログ`);
+  console.log(`  logs/download-state.json セーブポイント`);
+  console.log(`\n`);
+}
+
+// 安全な終了処理
+function safeExit(state) {
+  try {
+    if (state) saveJson(STATE_FILE, state);
+    // 進捗途中のスキップリスト・エラーログも保存
+    if (typeof globalThis._skip === 'object') saveJson(SKIP_FILE, globalThis._skip);
+    if (Array.isArray(globalThis._errors)) saveJson(ERROR_LOG, globalThis._errors);
+  } catch (e) {
+    // 保存失敗時も静かに終了
+  }
+  console.log('\n安全に終了しました。');
+  process.exit(0);
+}
+
 async function main() {
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    printUsage();
+    return;
+  }
+
   const likes = loadLikes();
   const skip = loadJson(SKIP_FILE, {});
   const errors = loadJson(ERROR_LOG, []);
@@ -90,6 +124,14 @@ async function main() {
   const doneIds = getDownloadedIds();
   let start = state.index || 0;
   let ok = 0, fail = 0, skipc = 0;
+
+  // グローバルに参照を持たせて安全終了時に保存できるように
+  globalThis._skip = skip;
+  globalThis._errors = errors;
+
+  // Ctrl+Cやkill時の安全終了
+  process.on('SIGINT', () => safeExit({ index: start }));
+  process.on('SIGTERM', () => safeExit({ index: start }));
 
   for (let i = start; i < likes.length; i++) {
     const t = likes[i].like;
@@ -115,6 +157,7 @@ async function main() {
       saveJson(ERROR_LOG, errors);
       console.log('FAIL:', e.message);
     }
+    start = i; // 現在のインデックスを常に更新
     if ((i + 1) % 20 === 0) saveJson(STATE_FILE, { index: i + 1 });
     await sleep(API_DELAY);
   }
