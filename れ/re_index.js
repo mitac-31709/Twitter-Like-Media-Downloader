@@ -18,11 +18,16 @@ function loadLikes() {
   return m ? JSON.parse(m[1]) : [];
 }
 
-function getDownloadedIds() {
+function getDownloadedMediaIds() {
   if (!fs.existsSync(DL_DIR)) return new Set();
-  return new Set(fs.readdirSync(DL_DIR)
-    .map(f => f.match(/^(\d+)-/) || f.match(/^(\d+)-metadata\.json$/))
-    .filter(Boolean).map(m => m[1]));
+  // メディアファイル（-metadata.json以外）だけを対象にID抽出
+  return new Set(
+    fs.readdirSync(DL_DIR)
+      .filter(f => !f.endsWith('-metadata.json'))
+      .map(f => f.match(/^([0-9]+)/))
+      .filter(Boolean)
+      .map(m => m[1])
+  );
 }
 
 function loadJson(file, def) {
@@ -117,19 +122,23 @@ async function main() {
     return;
   }
 
-  const likes = loadLikes();
+  let likes;
+  try {
+    likes = loadLikes();
+  } catch (e) {
+    console.error('like.jsの読み込み・パースに失敗:', e.message);
+    return;
+  }
   const skip = loadJson(SKIP_FILE, {});
   const errors = loadJson(ERROR_LOG, []);
   const state = loadJson(STATE_FILE, {});
-  const doneIds = getDownloadedIds();
+  const doneIds = getDownloadedMediaIds();
   let start = state.index || 0;
   let ok = 0, fail = 0, skipc = 0;
 
-  // グローバルに参照を持たせて安全終了時に保存できるように
   globalThis._skip = skip;
   globalThis._errors = errors;
 
-  // Ctrl+Cやkill時の安全終了
   process.on('SIGINT', () => safeExit({ index: start }));
   process.on('SIGTERM', () => safeExit({ index: start }));
 
@@ -157,7 +166,7 @@ async function main() {
       saveJson(ERROR_LOG, errors);
       console.log('FAIL:', e.message);
     }
-    start = i; // 現在のインデックスを常に更新
+    start = i;
     if ((i + 1) % 20 === 0) saveJson(STATE_FILE, { index: i + 1 });
     await sleep(API_DELAY);
   }
